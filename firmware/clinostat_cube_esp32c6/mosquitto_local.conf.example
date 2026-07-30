@@ -1,0 +1,11 @@
+# 로컬 Mosquitto (노트북) — 무선 펌프 보드용.
+# ⚠ 망이 NAT 없이 공인 IP를 할당하는 경우 브로커가 인터넷에 노출된다.
+#   익명 접속을 금지하고 반드시 인증을 사용한다.
+#
+# 이 파일을 mosquitto_local.conf 로 복사한 뒤 password_file 경로를 고친다.
+#   cp mosquitto_local.conf.example mosquitto_local.conf
+#   mosquitto_passwd -c ./mosquitto_passwd <계정>
+# 실행:  mosquitto -c mosquitto_local.conf -d
+listener 1883 0.0.0.0
+allow_anonymous false
+password_file /절대/경로/mosquitto_passwd
