@@ -1,0 +1,34 @@
+# SpaceBio Gateway — 모의 저항센서·모의 펌프·통합 세션 기록 (설계 스펙 3장)
+#
+# 설치:
+#   sudo cp deploy/spacebio-gateway.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now spacebio-gateway
+#
+# ⚠ clinostat.service는 이 유닛에 의존하지 않는다. Gateway가 죽어도 모터 제어는
+#   계속 돌아야 한다 (설계 스펙 7장). clinostat 쪽에 Requires=/After= 를 추가하지 마라.
+# ⚠ 127.0.0.1 에만 바인딩한다. 외부 접점은 기존 :8000 하나뿐이다.
+
+[Unit]
+Description=SpaceBio Gateway (simulated sensor/pump, loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aiworker-1
+Group=aiworker-1
+WorkingDirectory=/home/aiworker-1/spacebio-gateway
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/aiworker-1/spacebio-gateway/.venv/bin/python -m uvicorn gateway.app:app --host 127.0.0.1 --port 8010 --log-level info
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/aiworker-1/spacebio-data /home/aiworker-1/clinostat/spacebio-state
+
+[Install]
+WantedBy=multi-user.target
