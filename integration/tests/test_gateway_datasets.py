@@ -92,6 +92,90 @@ def test_pump_step_out_of_range_is_422(client):
     assert client.post("/api/pump/step", json={"steps": 200, "spm": 9999}).status_code == 422
 
 
+def test_pump_dispense_on_wireless_backend_is_409_not_500(tmp_path):
+    """무선 펌프에 부피 명령이 오면 409로 거절해야 한다.
+
+    µL 보정 상수가 없어 MqttPump 는 dispense 를 일부러 구현하지 않는데,
+    runtime 이 조건 없이 호출해 **AttributeError → 500** 으로 터졌다
+    (2026-08-04 실기 로그에 실제로 찍혔다). 지원하지 않는 것과 고장난 것은
+    다르게 보여야 한다.
+    """
+    from fastapi.testclient import TestClient
+    from gateway.app import create_app
+    from tests.conftest import make_gw_config
+    import gateway.runtime as rt
+
+    class FakeClient:
+        def __init__(self): self.published = []; self.on_message = None; self.on_connect = None
+        def username_pw_set(self, *a, **k): ...
+        def connect(self, *a, **k): ...
+        def subscribe(self, *a, **k): ...
+        def loop_start(self): ...
+        def loop_stop(self): ...
+        def disconnect(self): ...
+        def publish(self, t, p): self.published.append((t, p))
+
+    fake = FakeClient()
+    real_init = rt.MqttPump.__init__
+
+    def patched_init(self, **kwargs):
+        kwargs["client_factory"] = lambda: fake
+        real_init(self, **kwargs)
+    rt.MqttPump.__init__ = patched_init
+    try:
+        cfg = make_gw_config(tmp_path, pump_backend="wireless")
+        app = create_app(cfg)
+        with TestClient(app) as c:
+            r = c.post("/api/pump/dispense",
+                       json={"rate_ul_s": 10.0, "target_volume_ul": 100.0})
+            assert r.status_code == 409, f"500이 아니라 409여야 한다 (실제 {r.status_code})"
+            assert r.json()["error"]["code"] == "pump_backend_unsupported"
+    finally:
+        rt.MqttPump.__init__ = real_init
+
+
+def test_pump_step_while_latched_reports_pump_code_not_sensor(tmp_path):
+    """래치 중 스텝은 **펌프** 오류로 나가야 한다.
+
+    runtime 이 MqttPumpConflictError 를 SensorConflictError 로 재포장하면 코드가
+    `sensor_conflict` 가 되고, 패널은 그걸 '측정 정지를 먼저 누르세요' 로 옮긴다.
+    센서를 안 쓰는 구성에서는 **실행할 수 없는 안내**이고, 진짜 해법인 '비상정지
+    해제' 는 어디에도 안 나온다 — 2026-08-04 실기에서 실제로 막혔던 지점이다.
+    """
+    from fastapi.testclient import TestClient
+    from gateway.app import create_app
+    from tests.conftest import make_gw_config
+    import gateway.runtime as rt
+
+    class FakeClient:
+        def __init__(self): self.published = []; self.on_message = None; self.on_connect = None
+        def username_pw_set(self, *a, **k): ...
+        def connect(self, *a, **k): ...
+        def subscribe(self, *a, **k): ...
+        def loop_start(self): ...
+        def loop_stop(self): ...
+        def disconnect(self): ...
+        def publish(self, t, p): self.published.append((t, p))
+
+    fake = FakeClient()
+    real_init = rt.MqttPump.__init__
+
+    def patched_init(self, **kwargs):
+        kwargs["client_factory"] = lambda: fake
+        real_init(self, **kwargs)
+    rt.MqttPump.__init__ = patched_init
+    try:
+        cfg = make_gw_config(tmp_path, pump_backend="wireless")
+        app = create_app(cfg)
+        with TestClient(app) as c:
+            assert c.post("/api/pump/emergency-stop", json={}).status_code == 200
+            r = c.post("/api/pump/step", json={"steps": 200, "spm": 600})
+            assert r.status_code == 409
+            assert r.json()["error"]["code"] == "pump_estop_latched"
+    finally:
+        rt.MqttPump.__init__ = real_init
+
+
 def test_pump_step_works_on_wireless_backend(tmp_path):
     """실기 백엔드면 스텝이 MQTT로 발행되고 상태에 스텝 텔레메트리가 실린다."""
     from fastapi.testclient import TestClient

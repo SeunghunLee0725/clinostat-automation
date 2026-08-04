@@ -471,7 +471,16 @@ class GatewayRuntime:
     async def pump_command(self, command: PumpCommand) -> Union[PumpStatus, dict[str, Any]]:
         async with self._lock:
             if isinstance(command, PumpDispenseRequest):
-                return await self._pump.dispense(command)
+                # 무선 실기 펌프는 µL 보정 상수가 없어 dispense 를 구현하지 않는다.
+                # 조건 없이 부르면 AttributeError → 500 이다. 지원하지 않는 것과
+                # 고장난 것은 다르게 보여야 하므로 409 로 거절한다.
+                dispense = getattr(self._pump, "dispense", None)
+                if dispense is None:
+                    raise MqttPumpConflictError(
+                        "dispense requires volume calibration; use step commands",
+                        code="pump_backend_unsupported",
+                    )
+                return await dispense(command)
             if isinstance(command, PumpStopRequest):
                 return await self._pump.stop(command)
             if isinstance(command, PumpEmergencyStopRequest):
@@ -481,17 +490,22 @@ class GatewayRuntime:
             raise TypeError(f"unsupported pump command: {type(command)!r}")
 
     async def pump_step(self, request: PumpStepRequest) -> PumpStatus:
-        """실기 무선 펌프의 스텝 명령. 모의 펌프에는 스텝 개념이 없어 409."""
+        """실기 무선 펌프의 스텝 명령. 모의 펌프에는 스텝 개념이 없어 409.
+
+        ⚠ 펌프 오류를 SensorConflictError 로 감싸지 마라. 코드가 `sensor_conflict`
+        가 되어 패널이 '측정 정지를 먼저 누르세요' 로 안내하는데, 센서를 안 쓰는
+        구성에서는 실행할 수 없는 지시이고 진짜 해법('비상정지 해제')은 드러나지
+        않는다. MqttPumpConflictError 는 app.py 에 핸들러가 등록돼 있으므로 그대로
+        올려보내면 `pump_estop_latched` 같은 정확한 코드가 나간다.
+        """
         async with self._lock:
             step = getattr(self._pump, "step", None)
             if step is None:
-                raise SensorConflictError(
-                    "step commands require the wireless pump backend"
+                raise MqttPumpConflictError(
+                    "step commands require the wireless pump backend",
+                    code="pump_backend_unsupported",
                 )
-            try:
-                return await step(request)
-            except MqttPumpConflictError as exc:
-                raise SensorConflictError(str(exc)) from exc
+            return await step(request)
 
     async def _reset_emergency_stop_locked(
         self, command: PumpResetEmergencyStopRequest,
