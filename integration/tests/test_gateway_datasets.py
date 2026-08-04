@@ -99,6 +99,11 @@ def test_pump_dispense_on_wireless_backend_is_409_not_500(tmp_path):
     runtime 이 조건 없이 호출해 **AttributeError → 500** 으로 터졌다
     (2026-08-04 실기 로그에 실제로 찍혔다). 지원하지 않는 것과 고장난 것은
     다르게 보여야 한다.
+
+    ⚠ 코드는 스텝 쪽(`pump_backend_unsupported`)과 **달라야 한다.** 패널은 코드로만
+    문구를 고르므로 같은 코드를 쓰면 주입 실패에 "스텝 명령은 무선 펌프에서만
+    동작합니다. 현재는 모의 펌프 구성입니다" 라는 **사실과 다른 안내**가 나온다
+    (지금은 무선 실기 펌프가 맞고, 막힌 이유는 µL 보정이 없어서다).
     """
     from fastapi.testclient import TestClient
     from gateway.app import create_app
@@ -129,7 +134,7 @@ def test_pump_dispense_on_wireless_backend_is_409_not_500(tmp_path):
             r = c.post("/api/pump/dispense",
                        json={"rate_ul_s": 10.0, "target_volume_ul": 100.0})
             assert r.status_code == 409, f"500이 아니라 409여야 한다 (실제 {r.status_code})"
-            assert r.json()["error"]["code"] == "pump_backend_unsupported"
+            assert r.json()["error"]["code"] == "pump_volume_uncalibrated"
     finally:
         rt.MqttPump.__init__ = real_init
 

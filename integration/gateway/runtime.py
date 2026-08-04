@@ -474,11 +474,15 @@ class GatewayRuntime:
                 # 무선 실기 펌프는 µL 보정 상수가 없어 dispense 를 구현하지 않는다.
                 # 조건 없이 부르면 AttributeError → 500 이다. 지원하지 않는 것과
                 # 고장난 것은 다르게 보여야 하므로 409 로 거절한다.
+                # ⚠ 코드는 스텝 쪽(pump_backend_unsupported)과 달라야 한다. 패널은
+                # 코드로만 문구를 고르므로, 같은 코드를 쓰면 주입 실패에 "모의 펌프
+                # 구성입니다" 라는 사실과 다른 안내가 나간다. 백엔드는 무선이 맞고,
+                # 막힌 이유는 µL 보정 상수가 없다는 것이다.
                 dispense = getattr(self._pump, "dispense", None)
                 if dispense is None:
                     raise MqttPumpConflictError(
-                        "dispense requires volume calibration; use step commands",
-                        code="pump_backend_unsupported",
+                        "volume dispense needs µL calibration; use step commands",
+                        code="pump_volume_uncalibrated",
                     )
                 return await dispense(command)
             if isinstance(command, PumpStopRequest):
