@@ -1782,6 +1782,52 @@ window.addEventListener('resize', scheduleCameraResize);
   color: var(--text-dim); background: var(--bg); border-radius: 6px; padding: 8px;
   white-space: pre-wrap; }
 #spacebioPanel canvas { max-width: 100%; }
+
+/* ── 카드 안을 기능 단위로 나눈다 ──────────────────────────────────────
+   펌프 카드는 컨트롤이 18개다. 평평한 목록으로 두면 어디까지가 한 동작인지
+   알 수 없어 "보정 → 주입"처럼 순서가 있는 조작에서 길을 잃는다. */
+#spacebioPanel .sb-sec { margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,.08); }
+#spacebioPanel .sb-sec:first-of-type { margin-top: 10px; }
+/* ⚠ text-transform: uppercase 를 쓰면 안 된다 — µ(U+00B5)가 대문자 Μ(그리스 뮤)로
+   바뀌어 "µL 보정"이 "ML 보정"으로 보인다. 유체 취급 화면에서 µL↔mL 혼동은 위험하다. */
+#spacebioPanel .sb-sec-title { display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  color: var(--text-dim); margin-bottom: 2px; }
+/* 쓸 수 없는 구획은 통째로 흐리게 — 버튼 하나만 흐린 것보다 이유가 분명하다. */
+#spacebioPanel .sb-sec.is-off { opacity: .45; }
+#spacebioPanel .sb-sec.is-off .sb-sec-title::after { content: '사용 불가'; font-weight: 600;
+  letter-spacing: 0; text-transform: none; color: var(--text-dim); }
+
+/* 짧은 수치 입력은 두 개씩 나란히 — 세로로 쌓으면 카드가 불필요하게 길어진다.
+   ⚠ label+input 을 div 로 감싸 두 열로 나누면, 라벨이 두 줄인 쪽만 입력칸이 내려가
+   가로줄이 어긋난다. 라벨끼리 한 행·입력끼리 한 행에 두면 행 높이가 공유돼 항상 맞는다. */
+#spacebioPanel .sb-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px;
+  align-items: end; }
+#spacebioPanel .sb-fields > * { min-width: 0; }
+#spacebioPanel .sb-fields label { margin-top: 4px; align-self: end; }
+
+/* 버튼은 줄 단위로 모은다. 개별 margin 으로 흘리면 줄바꿈에서 어긋난다. */
+#spacebioPanel .sb-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+#spacebioPanel .sb-actions button { margin: 0; }
+
+/* 읽기 전용 수치 묶음 — 입력과 섞이지 않게 배경을 깐다. */
+#spacebioPanel .sb-readouts { margin-top: 8px; padding: 6px 8px;
+  background: rgba(255,255,255,.03); border-radius: 6px; }
+#spacebioPanel .sb-readouts .sb-row { padding: 2px 0; }
+/* 상태행은 좁은 2열에 깔린다. 라벨이 길면 줄바꿈돼 행 높이가 들쭉날쭉해지므로
+   한 줄로 묶고 넘치면 말줄임한다. 값(오른쪽)은 잘리지 않게 폭을 지켜 준다. */
+#spacebioPanel .sb-readouts .sb-row > span:first-child {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#spacebioPanel .sb-readouts .sb-row > span:last-child { flex: none; white-space: nowrap; }
+
+/* 비상정지는 오조작 대가가 크다 — 일반 조작과 확실히 갈라 놓는다. */
+#spacebioPanel .sb-danger-zone { margin-top: 14px; padding: 10px;
+  border: 1px solid rgba(239,71,111,.35); border-radius: 8px;
+  background: rgba(239,71,111,.06); }
+#spacebioPanel .sb-danger-zone .sb-sec-title { color: var(--accent); }
+#spacebioPanel .sb-danger-zone code { font-size: 11px; word-break: break-all;
+  background: rgba(0,0,0,.25); padding: 1px 4px; border-radius: 4px; }
 </style>
 
 <div id="spacebioPanel">
@@ -1796,26 +1842,39 @@ window.addEventListener('resize', scheduleCameraResize);
       <!-- 실기 BLE 센서 전용. CSV 재생·합성 신호·USB 시리얼 모드는 화면에서 제거했다
            (백엔드에는 남아 있어 필요하면 API로 직접 설정할 수 있다). -->
       <div class="sb-row"><span>연결</span><span>BLE 무선 (ResistanceSensor)</span></div>
-      <label for="spacebioExperimentName">실험명</label>
-      <input id="spacebioExperimentName" type="text" value="resistance-run">
 
-      <!-- 기존 앱(frontend_ble_web.py)이 열어두던 설정 둘. 나머지 파라미터
-           (sampling 50 Hz, gain 1, PGA 8)는 펌웨어 고정값이라 열지 않는다. -->
-      <label for="resistanceRref">레퍼런스 저항 Rref (Ω)</label>
-      <input id="resistanceRref" type="number" value="10000" min="100" max="1000000" step="100">
-      <label for="resistanceAvgFactor">시간평균 계수 N (1 = 평균 안 함)</label>
-      <input id="resistanceAvgFactor" type="number" value="1" min="1" max="200" step="1">
-      <div class="sb-hint" id="resistanceSettingHint"></div>
+      <!-- 실측값이 이 카드의 본론이다. 설정보다 위에 둔다. -->
+      <div class="sb-readouts">
+        <div class="sb-row"><span>저항</span><span id="resistanceValue">-</span></div>
+        <div class="sb-row"><span>ΔR/R₀</span><span id="resistanceDelta">-</span></div>
+        <div class="sb-row"><span>raw ADC</span><span id="resistanceAdc">-</span></div>
+        <div class="sb-row"><span>온도 (°C)</span><span id="resistanceTemperature">-</span></div>
+        <div class="sb-row"><span>배터리 (%)</span><span id="resistanceBattery">-</span></div>
+      </div>
 
-      <button id="resistanceStart">측정 시작</button>
-      <button id="resistanceStop">측정 정지</button>
-      <div class="sb-hint" id="spacebioRecordingHint"></div>
+      <div class="sb-sec">
+        <div class="sb-sec-title">① 설정</div>
+        <label for="spacebioExperimentName">실험명</label>
+        <input id="spacebioExperimentName" type="text" value="resistance-run">
+        <!-- 기존 앱(frontend_ble_web.py)이 열어두던 설정 둘. 나머지 파라미터
+             (sampling 50 Hz, gain 1, PGA 8)는 펌웨어 고정값이라 열지 않는다. -->
+        <div class="sb-fields">
+          <label for="resistanceRref">Rref (Ω)</label>
+          <label for="resistanceAvgFactor">시간평균 N</label>
+          <input id="resistanceRref" type="number" value="10000" min="100" max="1000000" step="100">
+          <input id="resistanceAvgFactor" type="number" value="1" min="1" max="200" step="1">
+        </div>
+        <div class="sb-hint" id="resistanceSettingHint"></div>
+      </div>
 
-      <div class="sb-row"><span>저항</span><span id="resistanceValue">-</span></div>
-      <div class="sb-row"><span>ΔR/R₀</span><span id="resistanceDelta">-</span></div>
-      <div class="sb-row"><span>raw ADC</span><span id="resistanceAdc">-</span></div>
-      <div class="sb-row"><span>온도 (°C)</span><span id="resistanceTemperature">-</span></div>
-      <div class="sb-row"><span>배터리 (%)</span><span id="resistanceBattery">-</span></div>
+      <div class="sb-sec">
+        <div class="sb-sec-title">② 측정 · 기록</div>
+        <div class="sb-actions">
+          <button id="resistanceStart">측정 시작</button>
+          <button id="resistanceStop">측정 정지</button>
+        </div>
+        <div class="sb-hint" id="spacebioRecordingHint"></div>
+      </div>
     </div>
 
     <div class="sb-card">
@@ -1833,35 +1892,76 @@ window.addEventListener('resize', scheduleCameraResize);
 
     <div class="sb-card">
       <h3>펌프 <span class="sb-badge" id="pumpSimulatedBadge">-</span></h3>
-      <div class="sb-row"><span>상태</span><span id="pumpState">idle</span></div>
-      <div class="sb-row"><span>비상정지 래치</span><span id="pumpEstopLatched">해제됨</span></div>
+
+      <!-- 지금 상태를 먼저 보여준다. 조작 전에 확인해야 할 것들이다. -->
+      <!-- 카드 폭이 좁고 상태행은 2열로 깔린다 — 라벨을 짧게 둬야 줄바꿈되지 않는다.
+           값만 봐도 뜻이 통하는 것(보정 "0.5 µL/step")은 단위를 라벨에서 뺐다. -->
+      <div class="sb-readouts">
+        <div class="sb-row"><span>상태</span><span id="pumpState">idle</span></div>
+        <div class="sb-row"><span>위치</span><span id="pumpPositionSteps">-</span></div>
+        <div class="sb-row"><span>보정</span><span id="pumpCalibration">-</span></div>
+        <div class="sb-row"><span>래치</span><span id="pumpEstopLatched">해제됨</span></div>
+      </div>
       <div class="sb-hint" id="pumpModeHint"></div>
-      <label for="pumpUlPerStep">스텝당 토출량 (µL/step)</label>
-      <input id="pumpUlPerStep" type="number" value="0.5" step="0.001" min="0.001" max="1000">
-      <button id="pumpApplyCalibration">보정 적용</button>
-      <div class="sb-row"><span>적용 중인 보정</span><span id="pumpCalibration">-</span></div>
-      <label for="pumpRate">유량 (µL/s, 1–200)</label>
-      <input id="pumpRate" type="number" value="50" step="0.1" min="1" max="200">
-      <label for="pumpTargetVolume">목표량 (µL, 1–1000)</label>
-      <input id="pumpTargetVolume" type="number" value="120" step="0.1" min="1" max="1000">
-      <div class="sb-row"><span>전달량</span><span id="pumpDeliveredVolume">0.0</span></div>
-      <div class="sb-row"><span>세션 누적</span><span id="pumpCumulativeVolume">0.0</span></div>
-      <button id="pumpDispense">주입</button>
-      <button id="pumpStop">정지</button>
-      <button id="pumpEmergencyStop" class="sb-danger">비상 정지</button>
-      <label for="pumpStepCount">스텝 수</label>
-      <input id="pumpStepCount" type="number" value="200" step="1" min="1">
-      <label for="pumpStepSpm">스텝 속도 (spm, 1–2400)</label>
-      <input id="pumpStepSpm" type="number" value="1200" step="1" min="1" max="2400">
-      <div class="sb-row"><span>위치 (steps)</span><span id="pumpPositionSteps">-</span></div>
-      <button id="pumpSendSteps">스텝 전송</button>
-      <!-- 확인 문구는 오타 방지용 안전장치지 암호가 아니다. 화면에 안 보이면
-           무엇을 입력해야 하는지 알 수 없어 해제 버튼이 영원히 비활성으로 남는다. -->
-      <label for="pumpResetAcknowledgement">해제 확인 문구를 정확히 입력 —
-        <code id="pumpResetAckHint">RESET_SIMULATED_PUMP_ESTOP</code></label>
-      <input id="pumpResetAcknowledgement" type="text"
-             placeholder="RESET_SIMULATED_PUMP_ESTOP">
-      <button id="pumpResetEmergencyStop" disabled>비상정지 해제</button>
+
+      <!-- ① 보정이 먼저다. 이 값이 있어야 ②가 열린다. -->
+      <div class="sb-sec" id="pumpCalibrationSection">
+        <div class="sb-sec-title">① µL 보정</div>
+        <label for="pumpUlPerStep">스텝당 토출량 (µL/step)</label>
+        <input id="pumpUlPerStep" type="number" value="0.5" step="0.001" min="0.001" max="1000">
+        <div class="sb-actions">
+          <button id="pumpApplyCalibration">보정 적용</button>
+        </div>
+      </div>
+
+      <div class="sb-sec" id="pumpVolumeSection">
+        <div class="sb-sec-title">② 부피 주입</div>
+        <div class="sb-fields">
+          <label for="pumpRate">유량 (µL/s)</label>
+          <label for="pumpTargetVolume">목표량 (µL)</label>
+          <input id="pumpRate" type="number" value="50" step="0.1" min="1" max="200">
+          <input id="pumpTargetVolume" type="number" value="120" step="0.1" min="1" max="1000">
+        </div>
+        <div class="sb-readouts">
+          <div class="sb-row"><span>전달량</span><span id="pumpDeliveredVolume">0.0</span></div>
+          <div class="sb-row"><span>세션 누적</span><span id="pumpCumulativeVolume">0.0</span></div>
+        </div>
+        <div class="sb-actions">
+          <button id="pumpDispense">주입</button>
+          <button id="pumpStop">정지</button>
+        </div>
+      </div>
+
+      <div class="sb-sec" id="pumpStepSection">
+        <div class="sb-sec-title">③ 스텝 구동</div>
+        <div class="sb-fields">
+          <label for="pumpStepCount">스텝 수</label>
+          <label for="pumpStepSpm">속도 (spm)</label>
+          <input id="pumpStepCount" type="number" value="200" step="1" min="1">
+          <input id="pumpStepSpm" type="number" value="1200" step="1" min="1" max="2400">
+        </div>
+        <div class="sb-actions">
+          <button id="pumpSendSteps">스텝 전송</button>
+        </div>
+      </div>
+
+      <!-- 비상정지는 일반 조작과 갈라 놓는다. 실수로 누르면 대가가 크고,
+           해제에는 확인 문구가 필요해 흐름 자체가 다르다. -->
+      <div class="sb-danger-zone">
+        <div class="sb-sec-title">⚠ 비상정지</div>
+        <div class="sb-actions">
+          <button id="pumpEmergencyStop" class="sb-danger">비상 정지</button>
+        </div>
+        <!-- 확인 문구는 오타 방지용 안전장치지 암호가 아니다. 화면에 안 보이면
+             무엇을 입력해야 하는지 알 수 없어 해제 버튼이 영원히 비활성으로 남는다. -->
+        <label for="pumpResetAcknowledgement">해제하려면 다음을 그대로 입력 —
+          <code id="pumpResetAckHint">RESET_SIMULATED_PUMP_ESTOP</code></label>
+        <input id="pumpResetAcknowledgement" type="text"
+               placeholder="RESET_SIMULATED_PUMP_ESTOP">
+        <div class="sb-actions">
+          <button id="pumpResetEmergencyStop" disabled>비상정지 해제</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2023,6 +2123,10 @@ function spacebioSyncPumpControls() {
   ['pumpUlPerStep', 'pumpApplyCalibration'].forEach((id) => {
     sbEl(id).disabled = !wireless;      // 보정은 스텝으로 도는 펌프에만 의미가 있다
   });
+  // 버튼 하나만 흐린 것보다 구획째 흐린 편이 "왜 못 쓰는지"가 분명하다.
+  sbEl('pumpCalibrationSection').classList.toggle('is-off', !wireless);
+  sbEl('pumpVolumeSection').classList.toggle('is-off', !volumeReady);
+  sbEl('pumpStepSection').classList.toggle('is-off', !wireless);
   sbEl('pumpModeHint').textContent = !wireless
     ? '모의 펌프 — 스텝 개념이 없습니다. 부피 주입을 쓰세요.'
     : volumeReady
