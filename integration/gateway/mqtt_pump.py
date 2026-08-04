@@ -106,12 +106,26 @@ class MqttPump:
     def connect(self) -> None:
         self._client = self._make_client()
         self._client.on_message = self._on_message
+        self._client.on_connect = self._on_connect
         try:
             self._client.connect(self._host, self._port)
-            self._client.subscribe(STATUS_TOPIC)
             self._client.loop_start()
         except Exception:  # noqa: BLE001 — 브로커 부재가 게이트웨이 기동을 막으면 안 된다
             logger.exception("mqtt pump connect failed")
+
+    def _on_connect(self, client, _userdata, _flags, _reason_code, *_args) -> None:
+        """접속이 성립할 때마다 구독을 건다.
+
+        connect() 직후에 구독하면 두 가지가 깨진다. ①paho 의 connect() 는 비블로킹이라
+        CONNACK 전에 SUBSCRIBE 가 나가 유실될 수 있다. ②clean_session 기본값에서는
+        재접속 때 브로커가 구독을 버리는데, 다시 걸 경로가 없으면 **영구히 상태를 못
+        받는다.** 명령 발행은 구독과 무관해 계속 되므로 "명령은 가는데 position_steps 가
+        null" 인 상태로 조용히 남는다 (2026-08-04 실기에서 실제로 이 상태였다).
+
+        paho v1 은 (client, userdata, flags, rc), v2 는 뒤에 properties 가 더 붙는다.
+        """
+        client.subscribe(STATUS_TOPIC)
+        logger.info("mqtt pump subscribed to %s", STATUS_TOPIC)
 
     def _make_client(self):
         if self._client_factory is not None:

@@ -13,25 +13,39 @@ from gateway.api_models import (
     PumpStepRequest,
     PumpStopRequest,
 )
-from gateway.mqtt_pump import MqttPump, PumpConflictError, parse_board_status
+from gateway.mqtt_pump import (
+    STATUS_TOPIC,
+    MqttPump,
+    PumpConflictError,
+    parse_board_status,
+)
 
 
 class FakeClient:
-    """paho 클라이언트 대역 — publish를 기록만 한다."""
+    """paho 클라이언트 대역 — publish·subscribe를 기록만 한다."""
 
     def __init__(self):
         self.published: list[tuple[str, str]] = []
+        self.subscribed: list[str] = []
         self.on_message = None
+        self.on_connect = None
 
     def username_pw_set(self, *a, **k): ...
     def connect(self, *a, **k): ...
-    def subscribe(self, *a, **k): ...
     def loop_start(self): ...
     def loop_stop(self): ...
     def disconnect(self): ...
 
+    def subscribe(self, topic, *a, **k):
+        self.subscribed.append(topic)
+
     def publish(self, topic, payload):
         self.published.append((topic, payload))
+
+    def fire_connect(self):
+        """브로커가 CONNACK을 돌려준 상황을 재현한다."""
+        assert self.on_connect is not None, "on_connect 핸들러가 등록되지 않았다"
+        self.on_connect(self, None, {}, 0)
 
 
 BOARD_LINE = ("ip=125.135.141.9,rssi=-48,run=off,mode=IDLE,current_spm=0,"
@@ -128,3 +142,35 @@ async def test_offline_publish_raises_conflict_not_crash():
     pump = MqttPump()          # connect 안 함 → client None
     with pytest.raises(PumpConflictError):
         await pump.step(PumpStepRequest(request_id="r", steps=10, spm=600))
+
+
+# ─────────────────────────── 구독 (재접속 포함) ───────────────────────────
+#
+# 구독을 connect() 직후에 명령형으로 부르면 두 가지가 깨진다.
+#   ① paho 의 connect() 는 비블로킹이라 CONNACK 전에 SUBSCRIBE 가 나가 유실될 수 있다.
+#   ② clean_session 기본값에서 재접속하면 브로커가 구독을 버리는데, 다시 걸어줄
+#      경로가 없어 **영구히 상태를 못 받는다.** 명령(publish)은 구독과 무관하게
+#      계속 되므로 "명령은 가는데 position_steps 가 null" 인 상태로 조용히 남는다.
+#      (2026-08-04 실기에서 실제로 이 상태였다.)
+# 그래서 구독은 반드시 on_connect 안에서, 접속할 때마다 이뤄져야 한다.
+
+def test_subscribe_happens_on_connack_not_before():
+    _, client = _pump()
+    assert client.subscribed == [], "CONNACK 전에 구독하면 유실될 수 있다"
+    client.fire_connect()
+    assert client.subscribed == [STATUS_TOPIC]
+
+
+def test_resubscribes_on_every_reconnect():
+    _, client = _pump()
+    client.fire_connect()
+    client.fire_connect()      # 브로커 재시작·네트워크 끊김 후 자동 재접속
+    assert client.subscribed == [STATUS_TOPIC, STATUS_TOPIC]
+
+
+@pytest.mark.asyncio
+async def test_status_flows_after_reconnect():
+    pump, client = _pump()
+    client.fire_connect()
+    pump.feed_status(BOARD_LINE)
+    assert (await pump.status()).position_steps == 782
