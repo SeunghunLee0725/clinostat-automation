@@ -1134,6 +1134,14 @@ async def spacebio_pump_dispense(request: Request):
     )
 
 
+@app.post("/api/spacebio/pump/calibration")
+async def spacebio_pump_calibration(request: Request):
+    """스텝당 토출량(µL/step). 부피 주입을 스텝으로 환산하는 근거값이다."""
+    return await _spacebio_relay(
+        request, "/api/spacebio/pump/calibration", await request.json()
+    )
+
+
 @app.post("/api/spacebio/pump/stop")
 async def spacebio_pump_stop(request: Request):
     return await _spacebio_relay(request, "/api/spacebio/pump/stop", {})

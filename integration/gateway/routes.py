@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Request
 from starlette.responses import StreamingResponse
 
 from gateway.api_models import (
+    PumpCalibrationRequest,
     PumpDispenseRequest,
     PumpStepRequest,
     PumpEmergencyStopRequest,
@@ -122,6 +123,15 @@ async def pump_dispense(
     runtime: GatewayRuntime = Depends(get_runtime),
 ):
     return envelope(request, await runtime.pump_command(body))
+
+
+@router.post("/api/pump/calibration")
+async def pump_calibration(
+    request: Request, body: PumpCalibrationRequest,
+    runtime: GatewayRuntime = Depends(get_runtime),
+):
+    """스텝당 토출량(µL/step). 이 값이 있어야 부피 주입을 스텝으로 환산할 수 있다."""
+    return envelope(request, await runtime.set_pump_calibration(body))
 
 
 @router.post("/api/pump/step")

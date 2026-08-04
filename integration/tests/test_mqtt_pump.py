@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from gateway.api_models import (
+    PumpDispenseRequest,
     PumpEmergencyStopRequest,
     PumpResetEmergencyStopRequest,
     PumpState,
@@ -142,6 +143,92 @@ async def test_offline_publish_raises_conflict_not_crash():
     pump = MqttPump()          # connect 안 함 → client None
     with pytest.raises(PumpConflictError):
         await pump.step(PumpStepRequest(request_id="r", steps=10, spm=600))
+
+
+# ─────────────────────────── 부피 주입 (µL 보정) ───────────────────────────
+#
+# 펌웨어는 스텝으로만 돈다. µL/스텝 상수를 알면 부피 명령을 스텝으로 환산할 수 있다.
+#   steps = target_volume_ul / ul_per_step
+#   spm   = (rate_ul_s / ul_per_step) * 60
+# 상수는 튜브 규격마다 다르므로 런타임에 넣는다. 없으면 추측하지 않고 거절한다.
+
+@pytest.mark.asyncio
+async def test_dispense_without_calibration_is_rejected():
+    pump, _ = _pump()
+    with pytest.raises(PumpConflictError) as exc:
+        await pump.dispense(PumpDispenseRequest(
+            request_id="d", rate_ul_s=10.0, target_volume_ul=120.0))
+    assert exc.value.code == "pump_volume_uncalibrated"
+
+
+@pytest.mark.asyncio
+async def test_dispense_converts_volume_to_steps_and_rate_to_spm():
+    pump, client = _pump()
+    pump.set_calibration(0.5)          # 0.5 µL/스텝
+    await pump.dispense(PumpDispenseRequest(
+        request_id="d", rate_ul_s=10.0, target_volume_ul=120.0))
+    # 120 µL / 0.5 = 240 스텝,  10 µL/s / 0.5 = 20 스텝/s → 1200 spm
+    assert client.published == [
+        ("s25007/board1/cmd", "spm:1200"),
+        ("s25007/board1/cmd", "manualstep:240"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispense_clamps_spm_to_firmware_range():
+    """환산값이 펌웨어 상한(2400)을 넘으면 잘라낸다 — 거절하면 쓸 수 없다."""
+    pump, client = _pump()
+    pump.set_calibration(0.5)
+    await pump.dispense(PumpDispenseRequest(
+        request_id="d", rate_ul_s=100.0, target_volume_ul=120.0))
+    assert ("s25007/board1/cmd", "spm:2400") in client.published
+
+
+@pytest.mark.asyncio
+async def test_dispense_rejects_volume_smaller_than_one_step():
+    pump, _ = _pump()
+    pump.set_calibration(50.0)         # 1스텝 = 50 µL
+    with pytest.raises(PumpConflictError) as exc:
+        await pump.dispense(PumpDispenseRequest(
+            request_id="d", rate_ul_s=10.0, target_volume_ul=20.0))  # 0.4 스텝
+    assert exc.value.code == "pump_volume_too_small"
+
+
+@pytest.mark.asyncio
+async def test_dispense_while_latched_is_rejected():
+    pump, _ = _pump()
+    pump.set_calibration(0.5)
+    await pump.emergency_stop(PumpEmergencyStopRequest(request_id="e"))
+    with pytest.raises(PumpConflictError) as exc:
+        await pump.dispense(PumpDispenseRequest(
+            request_id="d", rate_ul_s=10.0, target_volume_ul=120.0))
+    assert exc.value.code == "pump_estop_latched"
+
+
+@pytest.mark.asyncio
+async def test_status_reports_calibration_and_delivered_volume():
+    pump, _ = _pump()
+    pump.set_calibration(0.5)
+    pump.feed_status(BOARD_LINE)                       # pos=782
+    await pump.dispense(PumpDispenseRequest(
+        request_id="d", rate_ul_s=10.0, target_volume_ul=120.0))
+    pump.feed_status(BOARD_LINE.replace("pos=782", "pos=882"))   # 100 스텝 진행
+    status = await pump.status()
+    assert status.ul_per_step == 0.5
+    assert status.delivered_volume_ul == 50.0          # 100 스텝 × 0.5
+    assert status.target_volume_ul == 120.0
+
+
+@pytest.mark.asyncio
+async def test_delivered_volume_does_not_exceed_target():
+    """보드가 목표를 넘겨 돌아도 전달량은 목표에서 멈춘다 — 거짓 보고 방지."""
+    pump, _ = _pump()
+    pump.set_calibration(0.5)
+    pump.feed_status(BOARD_LINE)
+    await pump.dispense(PumpDispenseRequest(
+        request_id="d", rate_ul_s=10.0, target_volume_ul=120.0))
+    pump.feed_status(BOARD_LINE.replace("pos=782", "pos=1782"))  # 1000 스텝
+    assert (await pump.status()).delivered_volume_ul == 120.0
 
 
 # ─────────────────────────── 구독 (재접속 포함) ───────────────────────────

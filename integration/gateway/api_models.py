@@ -85,6 +85,9 @@ Finite = Field(allow_inf_nan=False)
 
 RateUlS = Annotated[float, Field(ge=1.0, le=200.0, allow_inf_nan=False)]
 VolumeUlS = Annotated[float, Field(ge=1.0, le=1000.0, allow_inf_nan=False)]
+#: 스텝당 토출량. 연동식 펌프는 튜브 규격마다 값이 달라 펌웨어에 상수로 둘 수 없다.
+#: 실측(정해진 스텝 수를 돌려 토출량 계량)으로 구해 런타임에 넣는다.
+UlPerStep = Annotated[float, Field(gt=0.0, le=1000.0, allow_inf_nan=False)]
 ReplaySpeed = Annotated[float, Field(ge=0.1, le=10.0, allow_inf_nan=False)]
 BaselineOhm = Annotated[float, Field(ge=1_000.0, le=10_000_000.0, allow_inf_nan=False)]
 PeriodS = Annotated[float, Field(ge=0.5, le=3600.0, allow_inf_nan=False)]
@@ -258,6 +261,12 @@ class PumpDispenseRequest(_Request):
         return round(value, VOLUME_DECIMALS)
 
 
+class PumpCalibrationRequest(_Request):
+    """스텝당 토출량을 넣는다. 이 값이 있어야 부피 주입을 스텝으로 환산할 수 있다."""
+
+    ul_per_step: UlPerStep
+
+
 class PumpStopRequest(_Request):
     pass
 
@@ -375,6 +384,8 @@ class PumpStatus(_Status):
     #: 실기 스텝 텔레메트리 (펌웨어 status의 pos/spm/run). 모의 모드에서는 None.
     position_steps: Optional[int] = None
     spm: Optional[int] = None
+    #: 적용 중인 µL 보정. None이면 부피 주입을 쓸 수 없다(화면이 이 값으로 판단한다).
+    ul_per_step: Optional[float] = None
 
 
 class DatasetInfo(_Status):

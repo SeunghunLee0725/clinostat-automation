@@ -25,6 +25,7 @@ from gateway.api_models import (
     GatewayComponent,
     GatewayState,
     GatewayStatus,
+    PumpCalibrationRequest,
     PumpDispenseRequest,
     PumpEmergencyStopRequest,
     PumpEvent,
@@ -510,6 +511,24 @@ class GatewayRuntime:
                     code="pump_backend_unsupported",
                 )
             return await step(request)
+
+    async def set_pump_calibration(
+        self, request: PumpCalibrationRequest,
+    ) -> PumpStatus:
+        """스텝당 토출량을 넣는다 — 이 값이 있어야 부피 주입을 환산할 수 있다.
+
+        연동식 펌프는 튜브 규격마다 값이 달라 펌웨어 상수로 둘 수 없다. 실측으로
+        구해 운영자가 화면에서 넣는다.
+        """
+        async with self._lock:
+            setter = getattr(self._pump, "set_calibration", None)
+            if setter is None:
+                raise MqttPumpConflictError(
+                    "this pump backend has no step-based calibration",
+                    code="pump_backend_unsupported",
+                )
+            setter(request.ul_per_step)
+            return await self._pump.status()
 
     async def _reset_emergency_stop_locked(
         self, command: PumpResetEmergencyStopRequest,

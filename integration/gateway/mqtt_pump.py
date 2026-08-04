@@ -25,6 +25,10 @@ from typing import Callable, Optional
 
 from gateway.api_models import (
     PUMP_MODE_WIRELESS,
+    PUMP_SPM_MAX,
+    PUMP_SPM_MIN,
+    VOLUME_DECIMALS,
+    PumpDispenseRequest,
     PumpEmergencyStopRequest,
     PumpResetEmergencyStopRequest,
     PumpState,
@@ -87,6 +91,7 @@ class MqttPump:
         port: int = 1883,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        ul_per_step: Optional[float] = None,
         client_factory: Optional[Callable[[], object]] = None,
     ) -> None:
         self._host = host
@@ -100,6 +105,13 @@ class MqttPump:
         self._board: Optional[BoardStatus] = None
         self._estop_latched = False
         self._session_start_pos: Optional[int] = None
+
+        # µL 보정. 없으면 부피 주입을 거절한다 — 환산 근거가 없는데 추측하면
+        # 주입량을 거짓으로 보고하게 된다.
+        self._ul_per_step: Optional[float] = ul_per_step
+        self._dispense_start_pos: Optional[int] = None
+        self._target_volume_ul: Optional[float] = None
+        self._rate_ul_s = 0.0
 
     # ─────────────────────────── 연결 ───────────────────────────
 
@@ -179,26 +191,53 @@ class MqttPump:
 
     # ─────────────────────────── 조회 ───────────────────────────
 
+    def _volumes_locked(self, board: Optional[BoardStatus]) -> dict[str, float]:
+        """보드 pos 변화량을 부피로 환산한다. guard를 잡은 채 부른다.
+
+        전달량은 목표를 넘지 않게 자른다 — 보드가 목표보다 더 돌아도(수동 개입 등)
+        "목표보다 많이 주입했다"고 보고하면 거짓이 된다.
+        """
+        ul = self._ul_per_step
+        if ul is None or board is None:
+            return {}
+        out: dict[str, float] = {}
+        if self._dispense_start_pos is not None:
+            delivered = max(0, board.position_steps - self._dispense_start_pos) * ul
+            if self._target_volume_ul is not None:
+                delivered = min(delivered, self._target_volume_ul)
+            out["delivered_volume_ul"] = round(delivered, VOLUME_DECIMALS)
+        if self._session_start_pos is not None:
+            cumulative = max(0, board.position_steps - self._session_start_pos) * ul
+            out["session_cumulative_volume_ul"] = round(cumulative, VOLUME_DECIMALS)
+        return out
+
     async def status(self) -> PumpStatus:
         with self._guard:
             board = self._board
             latched = self._estop_latched
+            extra = {
+                "ul_per_step": self._ul_per_step,
+                "target_volume_ul": self._target_volume_ul,
+                "rate_ul_s": self._rate_ul_s,
+                **self._volumes_locked(board),
+            }
         # 래치는 보드 텔레메트리보다 우선한다 — 상태를 아직 못 받았어도 래치돼
         # 있으면 반드시 emergency_stopped를 보고해야 안전하다.
         if latched:
             base = PumpStatus(mode=PUMP_MODE_WIRELESS,
                               state=PumpState.EMERGENCY_STOPPED, estop_latched=True)
             if board is None:
-                return base
+                return base.model_copy(update=extra)
             return base.model_copy(update={
-                "position_steps": board.position_steps, "spm": board.spm})
+                "position_steps": board.position_steps, "spm": board.spm, **extra})
         if board is None:
-            return PumpStatus(mode=PUMP_MODE_WIRELESS, state=PumpState.IDLE)
+            return PumpStatus(mode=PUMP_MODE_WIRELESS,
+                              state=PumpState.IDLE).model_copy(update=extra)
         state = PumpState.RUNNING if board.run else PumpState.IDLE
         return PumpStatus(
             mode=PUMP_MODE_WIRELESS, state=state, estop_latched=latched,
             position_steps=board.position_steps, spm=board.spm,
-        )
+        ).model_copy(update=extra)
 
     # ─────────────────────────── 명령 ───────────────────────────
 
@@ -207,8 +246,54 @@ class MqttPump:
             if self._estop_latched:
                 raise PumpConflictError(
                     "pump is emergency-stop latched", code="pump_estop_latched")
+            self._dispense_start_pos = None      # 스텝 명령은 부피 추적을 끝낸다
+            self._target_volume_ul = None
         self._publish(f"spm:{request.spm}")
         self._publish(f"manualstep:{request.steps}")
+        return await self.status()
+
+    def set_calibration(self, ul_per_step: float) -> None:
+        """스텝당 토출량을 넣는다. 튜브를 바꾸면 다시 재야 한다."""
+        with self._guard:
+            self._ul_per_step = ul_per_step
+
+    async def dispense(self, request: PumpDispenseRequest) -> PumpStatus:
+        """부피 명령을 스텝으로 환산해 발행한다.
+
+        펌웨어는 스텝으로만 돈다. 환산은 게이트웨이가 한다:
+            steps = target_volume_ul / ul_per_step
+            spm   = (rate_ul_s / ul_per_step) * 60
+        보정이 없으면 거절한다 — 추측하면 주입량을 거짓으로 보고하게 된다.
+        """
+        with self._guard:
+            if self._estop_latched:
+                raise PumpConflictError(
+                    "pump is emergency-stop latched", code="pump_estop_latched")
+            ul_per_step = self._ul_per_step
+            board_pos = self._board.position_steps if self._board else None
+
+        if ul_per_step is None:
+            raise PumpConflictError(
+                "volume dispense needs µL calibration; set ul_per_step or use steps",
+                code="pump_volume_uncalibrated")
+
+        steps = round(request.target_volume_ul / ul_per_step)
+        if steps < 1:
+            raise PumpConflictError(
+                f"target volume is smaller than one step ({ul_per_step} µL)",
+                code="pump_volume_too_small")
+
+        # 상한을 넘으면 잘라낸다. 거절하면 보정값에 따라 아예 못 쓰는 조합이 생긴다.
+        spm = round(request.rate_ul_s / ul_per_step * 60)
+        spm = max(PUMP_SPM_MIN, min(PUMP_SPM_MAX, spm))
+
+        with self._guard:
+            self._dispense_start_pos = board_pos
+            self._target_volume_ul = request.target_volume_ul
+            self._rate_ul_s = request.rate_ul_s
+
+        self._publish(f"spm:{spm}")
+        self._publish(f"manualstep:{steps}")
         return await self.status()
 
     async def stop(self, request: PumpStopRequest) -> PumpStatus:

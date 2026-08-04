@@ -44,6 +44,7 @@ ROUTE_MAP: dict[str, str] = {
     "/api/spacebio/sensor/datasets": "/api/sensor/datasets",
     "/api/spacebio/pump/status": "/api/pump/status",
     "/api/spacebio/pump/dispense": "/api/pump/dispense",
+    "/api/spacebio/pump/calibration": "/api/pump/calibration",
     "/api/spacebio/pump/step": "/api/pump/step",
     "/api/spacebio/pump/stop": "/api/pump/stop",
     "/api/spacebio/pump/emergency-stop": "/api/pump/emergency-stop",

@@ -1836,6 +1836,10 @@ window.addEventListener('resize', scheduleCameraResize);
       <div class="sb-row"><span>상태</span><span id="pumpState">idle</span></div>
       <div class="sb-row"><span>비상정지 래치</span><span id="pumpEstopLatched">해제됨</span></div>
       <div class="sb-hint" id="pumpModeHint"></div>
+      <label for="pumpUlPerStep">스텝당 토출량 (µL/step)</label>
+      <input id="pumpUlPerStep" type="number" value="0.5" step="0.001" min="0.001" max="1000">
+      <button id="pumpApplyCalibration">보정 적용</button>
+      <div class="sb-row"><span>적용 중인 보정</span><span id="pumpCalibration">-</span></div>
       <label for="pumpRate">유량 (µL/s, 1–200)</label>
       <input id="pumpRate" type="number" value="50" step="0.1" min="1" max="200">
       <label for="pumpTargetVolume">목표량 (µL, 1–1000)</label>
@@ -1896,6 +1900,8 @@ let spacebioSensorState = 'idle';
 // 부피 주입을 못 하고, 모의 펌프에는 스텝 개념이 없다. 눌러도 409 가 나는
 // 버튼을 열어두면 고장으로 오해하므로, 모드를 기억해 못 쓰는 쪽을 잠근다.
 let spacebioPumpMode = null;
+// 적용 중인 µL 보정. null 이면 부피 주입을 쓸 수 없다 (서버가 status로 알려준다).
+let spacebioPumpUlPerStep = null;
 //: 마지막으로 차트에 찍은 보드 타임스탬프. 같은 샘플을 두 번 찍지 않기 위한 것.
 let spacebioLastPlottedTs = null;
 let spacebioLastRender = 0;
@@ -1932,7 +1938,8 @@ async function spacebioFetch(path, options) {
       pump_backend_unsupported: '스텝 명령은 무선(실기) 펌프에서만 동작합니다. 현재는 모의 펌프 구성입니다.',
       // 주입은 스텝과 실패 이유가 다르다. 무선 펌프는 정상이고, µL↔스텝 환산
       // 상수가 펌웨어에 없어 부피 명령을 낼 근거가 없는 것이다.
-      pump_volume_uncalibrated: '무선 펌프는 µL 보정이 없어 부피 주입을 지원하지 않습니다. 아래 [스텝 전송]을 쓰세요.',
+      pump_volume_uncalibrated: 'µL 보정이 없습니다. 스텝당 토출량을 넣고 [보정 적용]을 먼저 누르세요.',
+      pump_volume_too_small: '목표량이 1스텝보다 작습니다. 목표량을 늘리거나 보정값을 확인하세요.',
       pump_conflict: '펌프가 명령을 받을 수 없는 상태입니다. 비상정지 래치와 연결 상태를 확인하세요.',
       gateway_unreachable: 'Gateway 응답이 없습니다. 잠시 후 다시 시도하세요.',
     }[err.code];
@@ -1998,22 +2005,29 @@ function spacebioSyncActionButtons() {
 }
 
 // 백엔드가 지원하지 않는 명령은 애초에 누를 수 없게 한다.
-//   무선(실기) — 스텝만. µL↔스텝 환산 상수가 펌웨어에 없어 부피 명령은 근거가 없다.
+//   무선(실기) — 스텝은 항상. 부피는 µL 보정이 들어와야 열린다.
 //   모의       — 부피만. 스텝 개념 자체가 없다.
 // 모드를 모르는 동안(첫 응답 전)에는 아무것도 잠그지 않는다.
 function spacebioSyncPumpControls() {
   const mode = spacebioPumpMode;
   if (!mode) return;
   const wireless = mode === 'WIRELESS';
+  // 무선에서 부피 주입은 보정이 있어야 근거가 생긴다. 없으면 잠근다.
+  const volumeReady = wireless ? spacebioPumpUlPerStep != null : true;
   ['pumpRate', 'pumpTargetVolume', 'pumpDispense'].forEach((id) => {
-    sbEl(id).disabled = wireless;
+    sbEl(id).disabled = !volumeReady;
   });
   ['pumpStepCount', 'pumpStepSpm', 'pumpSendSteps'].forEach((id) => {
     sbEl(id).disabled = !wireless;
   });
-  sbEl('pumpModeHint').textContent = wireless
-    ? '무선 실기 펌프 — µL 보정이 없어 부피 주입은 쓸 수 없습니다. 스텝 전송을 쓰세요.'
-    : '모의 펌프 — 스텝 개념이 없습니다. 부피 주입을 쓰세요.';
+  ['pumpUlPerStep', 'pumpApplyCalibration'].forEach((id) => {
+    sbEl(id).disabled = !wireless;      // 보정은 스텝으로 도는 펌프에만 의미가 있다
+  });
+  sbEl('pumpModeHint').textContent = !wireless
+    ? '모의 펌프 — 스텝 개념이 없습니다. 부피 주입을 쓰세요.'
+    : volumeReady
+      ? '무선 실기 펌프 — 부피 주입은 아래 보정값으로 스텝으로 환산해 보냅니다.'
+      : '무선 실기 펌프 — 스텝당 토출량을 넣고 [보정 적용]을 누르면 부피 주입이 열립니다.';
 }
 
 // 세션은 측정 시작/정지가 알아서 연다. 운영자가 따로 누를 버튼은 없다.
@@ -2129,8 +2143,13 @@ function spacebioRenderStatus(status) {
     pumpBadge.textContent = pump.mode === 'WIRELESS' ? '무선 실측' : '모의';
     pumpBadge.classList.toggle('sb-live', pump.mode === 'WIRELESS');
     spacebioPumpMode = pump.mode;
-    spacebioSyncPumpControls();   // 모드에 맞춰 못 쓰는 컨트롤을 잠근다
   }
+  if (pump.ul_per_step !== undefined) {
+    spacebioPumpUlPerStep = pump.ul_per_step;
+    sbEl('pumpCalibration').textContent = pump.ul_per_step == null
+      ? '없음 — 부피 주입 불가' : pump.ul_per_step + ' µL/step';
+  }
+  spacebioSyncPumpControls();   // 모드·보정에 맞춰 못 쓰는 컨트롤을 잠근다
   const latched = sbEl('pumpEstopLatched');
   latched.textContent = pump.estop_latched ? '래치됨 — 해제 필요' : '해제됨';
   latched.classList.toggle('sb-latched', !!pump.estop_latched);
@@ -2255,6 +2274,13 @@ async function spacebioInit() {
     await spacebioFetch('/api/spacebio/sensor/stop', { method: 'POST', body: {} });
     const finished = await spacebioFinishSession();
     spacebioLog(finished ? '측정 정지 — 기록 저장 완료 (' + finished + ')' : '측정 정지');
+  };
+  sbEl('pumpApplyCalibration').onclick = async () => {
+    const data = await spacebioFetch('/api/spacebio/pump/calibration', {
+      method: 'POST', body: { ul_per_step: Number(sbEl('pumpUlPerStep').value) } });
+    spacebioPumpUlPerStep = data.ul_per_step;
+    spacebioSyncPumpControls();
+    spacebioLog('µL 보정 적용 — ' + data.ul_per_step + ' µL/step');
   };
   sbEl('pumpDispense').onclick = async () => {
     await spacebioFetch('/api/spacebio/pump/dispense', { method: 'POST', body: {

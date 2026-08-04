@@ -51,6 +51,22 @@ def test_proxy_allowlists_the_dataset_route():
     assert spacebio_proxy.ROUTE_MAP["/api/spacebio/sensor/datasets"] == "/api/sensor/datasets"
 
 
+def test_proxy_allowlists_the_calibration_route():
+    """ROUTE_MAP 은 허용목록이다 — 등록하지 않으면 화면에서 404 가 난다."""
+    import sys
+    sys.path.insert(0, str(WORK))
+    import spacebio_proxy
+
+    assert spacebio_proxy.ROUTE_MAP["/api/spacebio/pump/calibration"] == \
+        "/api/pump/calibration"
+
+
+def test_clinostat_registers_the_calibration_proxy_route():
+    """등록 지점이 둘이다 — ROUTE_MAP 만 고치면 :8000 에 라우트가 안 생긴다."""
+    source = (WORK / "server.py").read_text(encoding="utf-8")
+    assert '"/api/spacebio/pump/calibration"' in source
+
+
 def test_clinostat_registers_the_dataset_proxy_route():
     source = (WORK / "server.py").read_text(encoding="utf-8")
     assert '"/api/spacebio/sensor/datasets"' in source
@@ -137,6 +153,63 @@ def test_pump_dispense_on_wireless_backend_is_409_not_500(tmp_path):
             assert r.json()["error"]["code"] == "pump_volume_uncalibrated"
     finally:
         rt.MqttPump.__init__ = real_init
+
+
+def test_pump_calibration_enables_volume_dispense(tmp_path):
+    """µL 보정을 넣으면 부피 주입이 스텝으로 환산돼 발행된다."""
+    from fastapi.testclient import TestClient
+    from gateway.app import create_app
+    from tests.conftest import make_gw_config
+    import gateway.runtime as rt
+
+    class FakeClient:
+        def __init__(self): self.published = []; self.on_message = None; self.on_connect = None
+        def username_pw_set(self, *a, **k): ...
+        def connect(self, *a, **k): ...
+        def subscribe(self, *a, **k): ...
+        def loop_start(self): ...
+        def loop_stop(self): ...
+        def disconnect(self): ...
+        def publish(self, t, p): self.published.append((t, p))
+
+    fake = FakeClient()
+    real_init = rt.MqttPump.__init__
+
+    def patched_init(self, **kwargs):
+        kwargs["client_factory"] = lambda: fake
+        real_init(self, **kwargs)
+    rt.MqttPump.__init__ = patched_init
+    try:
+        cfg = make_gw_config(tmp_path, pump_backend="wireless")
+        app = create_app(cfg)
+        with TestClient(app) as c:
+            # 보정 전에는 거절
+            assert c.post("/api/pump/dispense",
+                          json={"rate_ul_s": 10.0, "target_volume_ul": 120.0}
+                          ).status_code == 409
+
+            r = c.post("/api/pump/calibration", json={"ul_per_step": 0.5})
+            assert r.status_code == 200
+            assert r.json()["data"]["ul_per_step"] == 0.5
+
+            r = c.post("/api/pump/dispense",
+                       json={"rate_ul_s": 10.0, "target_volume_ul": 120.0})
+            assert r.status_code == 200, r.text
+        assert ("s25007/board1/cmd", "manualstep:240") in fake.published
+        assert ("s25007/board1/cmd", "spm:1200") in fake.published
+    finally:
+        rt.MqttPump.__init__ = real_init
+
+
+def test_pump_calibration_rejects_non_positive(tmp_path):
+    from fastapi.testclient import TestClient
+    from gateway.app import create_app
+    from tests.conftest import make_gw_config
+
+    app = create_app(make_gw_config(tmp_path))
+    with TestClient(app) as c:
+        assert c.post("/api/pump/calibration", json={"ul_per_step": 0}).status_code == 422
+        assert c.post("/api/pump/calibration", json={"ul_per_step": -1}).status_code == 422
 
 
 def test_pump_step_while_latched_reports_pump_code_not_sensor(tmp_path):
