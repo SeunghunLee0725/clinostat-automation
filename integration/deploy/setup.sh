@@ -63,7 +63,17 @@ pip install --upgrade pip
 pip install -r "$HERE/requirements.txt" -c "$CONSTRAINTS"
 
 if [[ "$PLATFORM_OS" == "Linux" && "$WITH_MQTT" == "1" ]]; then
-  echo "==> Mosquitto 로컬 설정 적용"
+  # 설정이 인증을 요구하므로 패스워드 파일이 먼저 있어야 한다. 없이 깔면 mosquitto 가
+  # 기동에 실패하고, 원인을 모른 채 allow_anonymous 로 되돌리기 쉽다 — 그러면 공인 IP
+  # 망에서 브로커가 인터넷에 열린다. 그래서 여기서 막고 만드는 법을 알려준다.
+  PASSWD_FILE=/etc/mosquitto/spacebio_passwd
+  if [[ ! -f "$PASSWD_FILE" ]]; then
+    echo "오류: $PASSWD_FILE 이 없다. 브로커 계정을 먼저 만든다:" >&2
+    echo "  sudo mosquitto_passwd -c $PASSWD_FILE <계정>" >&2
+    echo "  sudo chown root:mosquitto $PASSWD_FILE && sudo chmod 640 $PASSWD_FILE" >&2
+    exit 1
+  fi
+  echo "==> Mosquitto 로컬 설정 적용 (인증 필수)"
   sudo cp "$HERE/deploy/mosquitto.conf" /etc/mosquitto/conf.d/spacebio.conf
   sudo systemctl enable --now mosquitto
 fi
