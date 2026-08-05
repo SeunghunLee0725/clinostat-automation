@@ -119,7 +119,7 @@ python -m gateway.main                    # 게이트웨이 구동 (시뮬 센�
 mosquitto_sub -t 's25007/#' -v
 ```
 
-## 현재 상태 (2026-07-29, 브랜치 `feature/spacebio-integrated-dashboard`)
+## 현재 상태 (2026-08-05, `main`)
 
 실기에서 도는 것:
 - **BLE 저항센서** — 실측 36 Hz, `sensor_publish_hz: 50`으로 폴링을 맞췄다.
@@ -129,12 +129,19 @@ mosquitto_sub -t 's25007/#' -v
   pump_events.jsonl}`.
 - **기록 관리** — 화면에서 세션 목록·`.tar.gz` 다운로드·삭제. 자세한 계약은 [DEPLOY.md](DEPLOY.md).
 - **한 화면 배치** — 2560×1440 기준 런타임 3열 재배치(1600px 미만이면 원래 세로 배치).
+- **무선 펌프 (2026-08-04 실기 확인)** — 스텝 구동과 부피 주입 둘 다 돈다. 부피는
+  `ul_per_step` 보정으로 스텝을 환산한다. 대시보드 → 게이트웨이 → 브로커 → WiFi →
+  보드 → 모터까지 종단 검증했다(`step 300` → `pos` 정확히 +300).
 
 아직 아닌 것:
-- **무선 펌프 모터가 돌지 않는다.** 펌웨어·무선·STEP 펄스·GPIO는 전부 정상으로
-  확인했고(90,000+ 펄스, VMOT 16 V, 코일 여자됨), 남은 구간은 드라이버 출력~모터
-  전기 경로다. 멀티미터로 XIAO D9 패드↔드라이버 STEP 핀 도통을 봐야 한다.
+- **보드가 꺼져 있어도 명령이 200으로 성공한다.** 브로커는 보드가 없어도 publish를
+  받아 주므로 게이트웨이가 성공으로 보고한다. 보드 status 최종 수신 시각을 추적해
+  offline을 표시해야 한다.
 - 유로 방식(밸브/볼루스/수동)은 미정 → `pump_actuator`가 소스-불문 API로 흡수. (DEC-009)
+
+> 모터가 돌지 않던 원인은 셋이 겹친 것이었다 — 드라이버 고장, DRV8825 Vref 과설정으로
+> 인한 과전류·열 셧다운, 그리고 보드에 남아 있던 옛 펌웨어. 진단 요령은
+> [최상위 DEPLOY.md](../DEPLOY.md) 의 "운전 중 알아둘 것".
 
 ## 배포
 
@@ -147,7 +154,7 @@ PI_HOST=<주소> PI_USER=<사용자> bash deploy/deploy_to_pi.sh
 
 ## 테스트
 ```bash
-cd integration && .venv/bin/python -m pytest -q      # 537개
+cd integration && .venv/bin/python -m pytest -q      # 555개
 ```
 
 `tests/`는 게이트웨이, `clinostat_extension/tests/`는 프록시와 화면 계약을 본다.

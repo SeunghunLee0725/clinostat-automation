@@ -17,10 +17,12 @@
 ## 1. 저장소 가져오기
 
 ```bash
-git clone <저장소> integration
-cd integration
-git checkout feature/spacebio-integrated-dashboard
+git clone https://github.com/SeunghunLee0725/clinostat-automation.git
+cd clinostat-automation/integration
 ```
+
+이 문서는 게이트웨이(`integration/`)만 다룬다. 펌웨어까지 포함한 전체 순서는
+최상위 [`DEPLOY.md`](../DEPLOY.md) 에 있다.
 
 ## 2. 의존성
 
@@ -50,7 +52,7 @@ PYTHON=python3.14 bash deploy/setup.sh
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt -c <위 표의 잠금 파일>
-.venv/bin/python -m pytest -q      # 537개가 통과해야 한다
+.venv/bin/python -m pytest -q      # 555개가 통과해야 한다
 ```
 
 새 클론에서 게이트웨이만 띄워 보려면 dev 의존성 없이도 된다.
@@ -86,6 +88,7 @@ curl -s localhost:8010/health
 ```yaml
 pump:
   backend: wireless           # 실기 무선 펌프. 모의로 두려면 null
+  ul_per_step: 0.5            # 스텝당 토출량(실측). 비우면 부피 주입이 잠긴다
 mqtt:
   host: <브로커 IP>            # 무선 펌프 보드가 붙는 브로커
   username: <계정>
@@ -101,6 +104,43 @@ coordinator:
 
 `deploy/deploy_to_pi.sh`는 **config.yaml을 절대 덮어쓰지 않는다.** 설정 키가
 늘어났으면 이 문서를 보고 손으로 더해라.
+
+### MQTT 브로커 — 무선 펌프를 쓰려면 먼저 있어야 한다
+
+위 `mqtt.host` 는 **브로커가 이미 떠 있다고 가정한다.** 없으면 세운다. 보드와 같은
+/24 에 있는 기계(파이든 노트북이든) 아무 데나 하나면 된다.
+
+파이(systemd 로 상시 구동):
+
+```bash
+sudo apt install mosquitto mosquitto-clients
+sudo mosquitto_passwd -c /etc/mosquitto/spacebio_passwd <계정>
+sudo chown root:mosquitto /etc/mosquitto/spacebio_passwd
+sudo chmod 640 /etc/mosquitto/spacebio_passwd          # ⚠ 600 이면 기동 실패(status=13)
+bash deploy/setup.sh --with-mqtt                       # conf.d 에 설정을 깐다
+```
+
+노트북에서 임시로 띄울 때:
+
+```bash
+brew install mosquitto                                 # macOS
+mosquitto_passwd -c ./mosquitto_passwd <계정>
+cp deploy/mosquitto.conf ./mosquitto_local.conf        # password_file 을 이 경로로 고친다
+mosquitto -c ./mosquitto_local.conf -d
+```
+
+⚠ **익명 접속을 허용하지 마라.** 이 프로젝트가 쓰인 망 중에 NAT 없이 공인 IP 를 주는
+곳이 실제로 있었다. `allow_anonymous true` 면 브로커가 인터넷에 그대로 열리고 아무나
+펌프에 명령을 보낼 수 있다. `setup.sh --with-mqtt` 는 패스워드 파일이 없으면 거부한다.
+
+동작 확인 — 보드가 켜져 있으면 2초 주기로 status 가 흐른다.
+
+```bash
+mosquitto_sub -h <브로커> -u <계정> -P <암호> -t 's25007/#' -v
+```
+
+**보드의 브로커 주소는 재flash 없이 바꾼다.** USB 시리얼이나 MQTT 로
+`broker:<ip>` 또는 `brokerhost:<mDNS 이름>` 을 보내면 NVS 에 남는다.
 
 ### systemd
 

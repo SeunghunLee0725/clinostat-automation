@@ -15,7 +15,7 @@
 
 | 디렉터리 | 내용 |
 |---|---|
-| [`integration/`](integration/) | 게이트웨이(FastAPI) · 대시보드 확장 · 배포 스크립트 · 테스트 537개 |
+| [`integration/`](integration/) | 게이트웨이(FastAPI) · 대시보드 확장 · 배포 스크립트 · 테스트 555개 |
 | [`firmware/clinostat_cube_esp32c6/`](firmware/clinostat_cube_esp32c6/) | 무선 펌프 컨트롤러 펌웨어 (Seeed XIAO ESP32-C6) |
 
 ## 새 기계에 설치
@@ -38,7 +38,7 @@ systemd, BLE·방화벽 주의, 기록 관리 API, 저장 용량)는
 플래시 백업 `.bin` 도 없다 — 4 MB 전체 덤프에 NVS 자격증명이 박혀 있어
 `.gitignore` 가 막는다. 되돌리려면 작업 기계의 로컬 사본이 필요하다.
 
-## 현재 상태 (2026-07-30)
+## 현재 상태 (2026-08-05)
 
 도는 것:
 - **BLE 저항센서** — 실측 36 Hz, Rref·시간평균 계수를 화면에서 장치에 써 넣는다
@@ -46,17 +46,18 @@ systemd, BLE·방화벽 주의, 기록 관리 API, 저장 용량)는
 - **기록 관리** — 세션 목록 · `.tar.gz` 다운로드 · 삭제
 - **한 화면 배치** — 2560×1440 기준 3열 재배치
 - **펌웨어** — WiFi·MQTT·STEP 펄스 정상 (`hz:4000:8` → 30,052 펄스, 이론 30,050)
+- **무선 펌프 모터** — 스텝 구동·부피 주입 모두 실기 확인 (2026-08-04). 부피는
+  `ul_per_step` 보정으로 스텝을 환산한다. 대시보드부터 모터까지 종단 검증됨
 
 아직 아닌 것:
-- **무선 펌프 모터가 돌지 않는다.** 상류(펌웨어·무선·STEP 펄스·GPIO)는 전부 정상
-  확인했다(90,000+ 펄스, VMOT 16 V, 코일 여자됨). 남은 구간은 드라이버 출력~모터
-  전기 경로 — 멀티미터로 XIAO D9 패드↔드라이버 STEP 핀 도통을 봐야 한다.
+- **보드가 꺼져 있어도 명령이 200으로 성공한다** — 브로커가 publish를 받아 주기
+  때문이다. 보드 status 최종 수신 시각을 추적해 offline을 표시해야 한다
 - 유로 방식(밸브/볼루스/수동) 미정 → `pump_actuator` 가 소스-불문 API로 흡수
 
 ## 테스트
 
 ```bash
-cd integration && .venv/bin/python -m pytest -q      # 537개
+cd integration && .venv/bin/python -m pytest -q      # 555개
 ```
 
 `tests/` 는 게이트웨이, `clinostat_extension/tests/` 는 프록시와 화면 계약을 본다.
