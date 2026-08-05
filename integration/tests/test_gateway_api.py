@@ -492,6 +492,26 @@ def test_load_config_matches_spec_defaults():
     assert config.pump_max_rate_ul_s == 200.0
 
 
+def test_pump_ul_per_step_defaults_to_none_when_absent():
+    """보정은 선택이다 — 없으면 None 이고 부피 주입이 잠긴다."""
+    config: GatewayConfig = load_config(REPO_ROOT / "config.yaml")
+    assert config.pump_ul_per_step is None
+
+
+def test_pump_ul_per_step_is_read_from_config(tmp_path):
+    """µL 보정을 기계 설정으로 둘 수 있어야 한다.
+
+    런타임 API 로만 넣을 수 있으면 게이트웨이를 재시작할 때마다 사라져, 운영자가
+    매번 다시 넣어야 한다. 튜브가 고정된 설치에서는 기계 설정이 맞다.
+    """
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump({
+        "gateway": {"host": "127.0.0.1", "port": 8010},
+        "pump": {"backend": "wireless", "ul_per_step": 0.5},
+    }), encoding="utf-8")
+    assert load_config(path).pump_ul_per_step == 0.5
+
+
 def test_app_module_never_binds_0000():
     """`app.py`는 host/port를 직접 고르지 않고 항상 GatewayConfig에서 읽는다.
 

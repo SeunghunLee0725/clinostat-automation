@@ -5,7 +5,11 @@ mqtt:
   client_id: spacebio-gateway
 
 pump:
-  backend: null          # null | serial   (하드웨어 연결 시 serial)
+  backend: null          # null | serial | wireless  (실기 무선 펌프는 wireless)
+  # 스텝당 토출량(µL/step). 무선 펌프의 부피 주입은 이 값으로 스텝을 환산한다.
+  # 튜브 규격마다 다르므로 실측해서 넣는다 — 비우면 부피 주입이 잠긴다.
+  # (화면에서도 넣을 수 있지만, 여기 두면 재시작해도 유지된다.)
+  ul_per_step: null
   serial_port: /dev/ttyUSB0
   limits:
     min_volume_ul: 1.0

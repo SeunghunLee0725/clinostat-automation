@@ -152,6 +152,7 @@ class GatewayRuntime:
             self._pump: Any = MqttPump(
                 host=self._config.mqtt_host, port=self._config.mqtt_port,
                 username=self._config.mqtt_username, password=self._config.mqtt_password,
+                ul_per_step=self._config.pump_ul_per_step,
             )
         else:
             self._pump = SimulatedPump(

@@ -34,6 +34,10 @@ class GatewayConfig:
     pump_max_volume_ul: float = 1000.0
     pump_min_rate_ul_s: float = 1.0
     pump_max_rate_ul_s: float = 200.0
+    #: 스텝당 토출량(µL/step). 실기 무선 펌프의 부피 주입은 이 값으로 스텝을 환산한다.
+    #: 튜브 규격마다 달라 실측해야 하므로 기본은 None(부피 주입 잠김) — 화면에서
+    #: 넣을 수도 있지만, 여기 두면 게이트웨이를 재시작해도 유지된다.
+    pump_ul_per_step: Optional[float] = None
     #: 실기 무선 펌프(pump_backend=="wireless")용 MQTT 브로커.
     mqtt_host: str = "127.0.0.1"
     mqtt_port: int = 1883
@@ -92,6 +96,9 @@ def load_config(path: Path) -> GatewayConfig:
         pump_max_volume_ul=float(limits.get("max_volume_ul", 1000.0)),
         pump_min_rate_ul_s=float(limits.get("min_rate_ul_s", 1.0)),
         pump_max_rate_ul_s=float(limits.get("max_rate_ul_s", 200.0)),
+        pump_ul_per_step=(
+            None if pump.get("ul_per_step") is None else float(pump["ul_per_step"])
+        ),
         mqtt_host=str(mqtt.get("host", "127.0.0.1")),
         mqtt_port=int(mqtt.get("port", 1883)),
         mqtt_username=mqtt.get("username"),
