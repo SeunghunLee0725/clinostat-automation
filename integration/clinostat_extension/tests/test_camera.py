@@ -284,6 +284,72 @@ def test_picamera_read_has_numeric_timeout(camera_module):
     assert fake.wait_values == [2.0]
 
 
+@pytest.mark.parametrize('failure_stage', ('constructor', 'isOpened', 'set', 'read'))
+def test_cv2_open_exception_releases_temporary_handle_and_reports_error(
+    camera_module, monkeypatch, failure_stage
+):
+    release_calls = []
+
+    class ExplodingVideoCapture:
+        def isOpened(self):
+            if failure_stage == 'isOpened':
+                raise RuntimeError('isOpened failed')
+            return True
+
+        def set(self, _prop, _value):
+            if failure_stage == 'set':
+                raise RuntimeError('set failed')
+            return True
+
+        def read(self):
+            if failure_stage == 'read':
+                raise RuntimeError('read failed')
+            return True, object()
+
+        def release(self):
+            release_calls.append('release')
+
+    if failure_stage == 'constructor':
+        def create_capture(*_args):
+            raise RuntimeError('constructor failed')
+    else:
+        def create_capture(*_args):
+            return ExplodingVideoCapture()
+
+    monkeypatch.setattr(camera_module.cv2, 'VideoCapture', create_capture)
+    cam = camera_module.Camera()
+    cam._frame_cond = RecordingCondition()
+
+    assert cam._open_cv2() is False
+    assert release_calls == ([] if failure_stage == 'constructor' else ['release'])
+    assert cam._cap is None
+    assert cam._backend == 'none'
+    assert cam._last_error == (
+        f'cv2 open failed: RuntimeError: {failure_stage} failed'
+    )
+    assert cam._frame_cond.notify_count == 1
+
+
+def test_viewer_preserves_detailed_cv2_open_error_without_fallback(
+    camera_module, monkeypatch
+):
+    def create_capture(*_args):
+        raise OSError('video device unavailable')
+
+    monkeypatch.setattr(camera_module.cv2, 'VideoCapture', create_capture)
+    monkeypatch.setattr(camera_module, '_HAS_PICAMERA2', False)
+    cam = camera_module.Camera(recovery_backoff_s=1.0)
+    try:
+        with cam.viewer():
+            assert cam._last_error == (
+                'cv2 open failed: OSError: video device unavailable'
+            )
+            assert cam._capture_thread is not None
+            assert cam._capture_thread.is_alive() is True
+    finally:
+        cam.stop()
+
+
 def test_status_is_unhealthy_before_first_frame(camera_module):
     cam = camera_module.Camera()
     cam._backend = 'picamera2'
@@ -658,6 +724,135 @@ def test_picamera_timeout_recovers_and_clears_error_only_after_publication(
     cam.stop()
 
 
+def test_stop_cancels_blocked_picamera_then_worker_closes_backend(camera_module):
+    capture_started = threading.Event()
+    capture_unblock = threading.Event()
+    cancel_observed = threading.Event()
+    operations = []
+
+    class BlockingPicamera:
+        def capture_array(self, *, wait):
+            assert wait == 0.05
+            operations.append(('capture-start', threading.current_thread().name))
+            capture_started.set()
+            assert capture_unblock.wait(timeout=1.0)
+            operations.append(('capture-unblocked', threading.current_thread().name))
+            raise TimeoutError('capture cancelled')
+
+        def cancel_all_and_flush(self):
+            operations.append(('cancel', threading.current_thread().name))
+            cancel_observed.set()
+            capture_unblock.set()
+
+        def stop(self):
+            operations.append(('stop', threading.current_thread().name))
+
+        def close(self):
+            operations.append(('close', threading.current_thread().name))
+
+    cam = camera_module.Camera(capture_timeout_s=0.05)
+    cam._backend = 'picamera2'
+    cam._picam = BlockingPicamera()
+    cam._viewers = 1
+    worker = threading.Thread(
+        target=cam._capture_loop,
+        daemon=True,
+        name='camera-capture-worker',
+    )
+    cam._capture_thread = worker
+    join_timeouts = []
+    original_join = worker.join
+
+    def recording_join(timeout=None):
+        join_timeouts.append(timeout)
+        return original_join(timeout)
+
+    worker.join = recording_join
+    worker.start()
+    assert capture_started.wait(timeout=0.5)
+
+    stopper = threading.Thread(target=cam.stop, name='camera-stopper')
+    stopper.start()
+    cancelled_before_forced_cleanup = cancel_observed.wait(timeout=0.3)
+    if not cancelled_before_forced_cleanup:
+        capture_unblock.set()
+    stopper.join(timeout=0.75)
+    original_join(timeout=0.5)
+
+    assert cancelled_before_forced_cleanup is True
+    assert stopper.is_alive() is False
+    assert worker.is_alive() is False
+    assert join_timeouts and join_timeouts[0] > cam.capture_timeout_s
+    first_cancel = operations.index(('cancel', 'camera-stopper'))
+    unblocked = operations.index(('capture-unblocked', 'camera-capture-worker'))
+    stopped = operations.index(('stop', 'camera-capture-worker'))
+    closed = operations.index(('close', 'camera-capture-worker'))
+    assert first_cancel < unblocked < stopped < closed
+    assert cam._capture_thread is None
+    assert cam._backend == 'none'
+    assert cam._picam is None
+
+
+def test_stop_does_not_close_backend_while_capture_worker_is_alive(camera_module):
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+    calls = []
+
+    class StillBlockedPicamera:
+        def capture_array(self, *, wait):
+            assert wait == 0.05
+            capture_started.set()
+            assert release_capture.wait(timeout=1.0)
+            raise TimeoutError('released after stop returned')
+
+        def cancel_all_and_flush(self):
+            calls.append(('cancel', threading.current_thread().name))
+
+        def stop(self):
+            calls.append(('stop', threading.current_thread().name))
+
+        def close(self):
+            calls.append(('close', threading.current_thread().name))
+
+    cam = camera_module.Camera(capture_timeout_s=0.05)
+    backend = StillBlockedPicamera()
+    cam._backend = 'picamera2'
+    cam._picam = backend
+    cam._viewers = 1
+    worker = threading.Thread(
+        target=cam._capture_loop,
+        daemon=True,
+        name='camera-capture-worker',
+    )
+    cam._capture_thread = worker
+    original_join = worker.join
+    join_timeouts = []
+
+    def incomplete_join(timeout=None):
+        join_timeouts.append(timeout)
+
+    worker.join = incomplete_join
+    worker.start()
+    assert capture_started.wait(timeout=0.5)
+
+    cam.stop()
+
+    assert join_timeouts and join_timeouts[0] > cam.capture_timeout_s
+    assert worker.is_alive() is True
+    assert calls == [('cancel', threading.current_thread().name)]
+    assert cam._backend == 'picamera2'
+    assert cam._picam is backend
+    assert cam._capture_thread is worker
+
+    release_capture.set()
+    original_join(timeout=0.5)
+    assert worker.is_alive() is False
+    assert calls[-2:] == [
+        ('stop', 'camera-capture-worker'),
+        ('close', 'camera-capture-worker'),
+    ]
+
+
 def test_stale_failed_read_does_not_close_replacement_backend(camera_module):
     read_started = threading.Event()
     release_failed_read = threading.Event()
@@ -778,7 +973,7 @@ def test_stale_worker_cannot_adopt_backend_owned_by_replacement_worker(
             cam._last_frame_t = 123.0
             cam._last_error = 'replacement still starting'
     release_old_read.set()
-    old_worker.join(timeout=0.2)
+    old_worker.join(timeout=0.5)
     exited_without_forced_stop = not old_worker.is_alive()
     if old_worker.is_alive():
         cam._stop.set()
@@ -884,6 +1079,123 @@ def test_initial_open_failure_keeps_viewer_owned_worker_retrying(
     assert attempts == [1, 1]
     assert cam.recovery_backoff_s in wait_timeouts
     assert cam.viewer_count == 0
+
+
+def test_initial_open_exception_still_starts_worker_and_recovers(
+    camera_module
+):
+    reopened = threading.Event()
+    allow_frame = threading.Event()
+    attempts = []
+
+    class RecoveredPicamera:
+        def capture_array(self, *, wait):
+            assert wait == 0.02
+            assert allow_frame.wait(timeout=1.0)
+            return RGBFrame()
+
+        def cancel_all_and_flush(self):
+            allow_frame.set()
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    cam = camera_module.Camera(
+        capture_timeout_s=0.02,
+        recovery_backoff_s=0.01,
+    )
+
+    def open_camera():
+        attempts.append(cam._viewers)
+        if len(attempts) == 1:
+            raise RuntimeError('initial open exploded')
+        cam._backend = 'picamera2'
+        cam._picam = RecoveredPicamera()
+        reopened.set()
+        return True
+
+    cam._open = open_camera
+    try:
+        with cam.viewer():
+            assert reopened.wait(timeout=0.5)
+            assert cam._last_error == (
+                'camera open failed: RuntimeError: initial open exploded'
+            )
+            allow_frame.set()
+            with cam._frame_cond:
+                assert cam._frame_cond.wait_for(
+                    lambda: cam._frame_seq > 0,
+                    timeout=0.5,
+                )
+                assert cam._last_error is None
+    finally:
+        cam.stop()
+
+    assert attempts == [1, 1]
+
+
+def test_retry_open_exception_keeps_worker_alive_until_later_success(
+    camera_module
+):
+    reopened = threading.Event()
+    allow_frame = threading.Event()
+    attempts = []
+
+    class RecoveredPicamera:
+        def capture_array(self, *, wait):
+            assert wait == 0.02
+            assert allow_frame.wait(timeout=1.0)
+            return RGBFrame()
+
+        def cancel_all_and_flush(self):
+            allow_frame.set()
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    cam = camera_module.Camera(
+        capture_timeout_s=0.02,
+        recovery_backoff_s=0.01,
+    )
+
+    def open_camera():
+        attempts.append(cam._viewers)
+        if len(attempts) == 1:
+            return False
+        if len(attempts) == 2:
+            raise RuntimeError('retry open exploded')
+        cam._backend = 'picamera2'
+        cam._picam = RecoveredPicamera()
+        reopened.set()
+        return True
+
+    cam._open = open_camera
+    try:
+        with cam.viewer():
+            assert reopened.wait(timeout=0.5)
+            worker = cam._capture_thread
+            assert worker is not None
+            assert worker.is_alive() is True
+            assert cam._last_error == (
+                'camera open failed: RuntimeError: retry open exploded'
+            )
+            allow_frame.set()
+            with cam._frame_cond:
+                assert cam._frame_cond.wait_for(
+                    lambda: cam._frame_seq > 0,
+                    timeout=0.5,
+                )
+                assert cam._last_error is None
+    finally:
+        cam.stop()
+
+    assert attempts == [1, 1, 1]
 
 
 @pytest.mark.parametrize(
@@ -993,7 +1305,7 @@ def test_mjpeg_generator_uses_frame_sequence_for_identical_bytes(
             cam._latest_jpeg = shared_jpeg
             cam._frame_seq = sequence
             cam._frame_cond.notify_all()
-        consumer.join(timeout=0.2)
+        consumer.join(timeout=0.5)
         if consumer.is_alive():
             cam._stop.set()
             with cam._frame_cond:

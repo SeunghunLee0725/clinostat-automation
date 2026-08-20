@@ -133,21 +133,30 @@ class Camera:
                 self._frame_cond.notify_all()
 
     def _open_cv2(self) -> bool:
-        cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            cap.release()
-            return False
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        cap.set(cv2.CAP_PROP_FPS, self.fps)
+        cap = None
         try:
+            cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
+            if not cap.isOpened():
+                cap.release()
+                return False
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            cap.set(cv2.CAP_PROP_FPS, self.fps)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        except Exception:
-            pass
-        # Verify we can actually read a frame (unicam may open but not deliver)
-        ok, _ = cap.read()
-        if not ok:
-            cap.release()
+            # Verify we can actually read a frame (unicam may open but not deliver)
+            ok, _ = cap.read()
+            if not ok:
+                cap.release()
+                return False
+        except Exception as exc:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            self._set_error(
+                f"cv2 open failed: {type(exc).__name__}: {exc}"
+            )
             return False
         self._cap = cap
         self._backend = "cv2"
@@ -183,9 +192,13 @@ class Camera:
             return True
         if self._open_picamera2():
             return True
-        self._set_error(
-            f"cannot open {self.device} (tried cv2+V4L2 and picamera2)"
-        )
+        with self._frame_cond:
+            if self._last_error is None:
+                self._last_error = (
+                    f"cannot open {self.device} "
+                    "(tried cv2+V4L2 and picamera2)"
+                )
+                self._frame_cond.notify_all()
         self._backend = "none"
         return False
 
@@ -282,7 +295,13 @@ class Camera:
                         and self._viewers > 0
                         and self._backend == "none"
                     ):
-                        self._open()
+                        try:
+                            self._open()
+                        except Exception as exc:
+                            self._set_error(
+                                f"camera open failed: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
                 continue
             try:
                 ok, frame = self._read_frame(backend, backend_handle)
@@ -349,7 +368,12 @@ class Camera:
         """Open the camera + start the capture thread if not already running."""
         with self._lock:
             if not self.is_open:
-                self._open()
+                try:
+                    self._open()
+                except Exception as exc:
+                    self._set_error(
+                        f"camera open failed: {type(exc).__name__}: {exc}"
+                    )
             if self._capture_thread is None or not self._capture_thread.is_alive():
                 self._stop.clear()
                 self._capture_thread = threading.Thread(
@@ -433,10 +457,48 @@ class Camera:
             self._frame_cond.notify_all()
         with self._lock:
             t = self._capture_thread
-        if t is not None:
-            t.join(timeout=1.0)
+            backend = self._backend
+            if backend == "cv2":
+                backend_handle = self._cap
+            elif backend == "picamera2":
+                backend_handle = self._picam
+            else:
+                backend_handle = None
+        if (
+            t is not None
+            and t.is_alive()
+            and backend == "picamera2"
+            and backend_handle is not None
+        ):
+            try:
+                backend_handle.cancel_all_and_flush()
+            except Exception:
+                pass
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=self.capture_timeout_s + 0.25)
+        if t is not None and t.is_alive():
+            return
         with self._lock:
-            self._close()
+            if (
+                self._capture_thread is not None
+                and self._capture_thread is not t
+            ):
+                return
+            backend_is_still_current = (
+                backend == "cv2"
+                and backend_handle is not None
+                and self._backend == backend
+                and self._cap is backend_handle
+            ) or (
+                backend == "picamera2"
+                and backend_handle is not None
+                and self._backend == backend
+                and self._picam is backend_handle
+            )
+            if backend_is_still_current:
+                self._close()
+            if self._capture_thread is t:
+                self._capture_thread = None
 
 
 # Process-wide singleton
