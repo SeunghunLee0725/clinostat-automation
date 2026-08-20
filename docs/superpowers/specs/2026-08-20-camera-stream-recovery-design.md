@@ -146,11 +146,13 @@ that general-purpose script also deploys gateway files and restarts
 `spacebio-gateway.service`. Instead, treat `camera.py` and `server.py` as one
 incident unit: stage, compile, hash, and install both before loading either,
 then restart only `clinostat.service`. Every SSH operation has finite connect
-and keepalive limits. The service is configured with `Restart=always`; because
-direct `systemctl restart` is unavailable to the SSH user, validate its exact
-MainPID, unit user, process UID, and argv before signaling that PID and letting
-systemd recreate it. Do not upload, signal, or restart any SpaceBio gateway
-file or process.
+and keepalive limits. Because the operator host login shell is zsh, the entire
+Task 4 procedure runs in one explicitly verified persistent Bash process; each
+command block checks the recorded Bash PID before proceeding. The service is
+configured with `Restart=always`; because direct `systemctl restart` is
+unavailable to the SSH user, validate its exact MainPID, unit user, process
+UID, and argv before signaling that PID and letting systemd recreate it. Do
+not upload, signal, or restart any SpaceBio gateway file or process.
 
 Adding `camera.py` beside the existing `server.py` entry in `EXTENSION_PAIRS`
 only makes both canonical sources part of later full-system deployments; the
@@ -162,10 +164,12 @@ hashes, paths, and PIDs are still in scope. Any failed live criterion
 automatically disables recursive traps, restores both validated backups with
 live-hash guards, performs an exact-target clinostat-only handoff, verifies
 both old hashes, stopped state, root response, and unchanged gateway PID, then
-exits nonzero. Old/old resumes handoff without rewriting; a pair composed only
-of the recorded old/new hashes restores both backups; any unknown hash aborts
-without overwrite. The manual rollback commands use the same classification
-as an auditable fallback, not the primary failure path.
+exits nonzero. Before calling rollback, the handler clears its armed-state flag
+so shell-specific function trap scope cannot invoke rollback twice. Old/old
+resumes handoff without rewriting; a pair composed only of the recorded
+old/new hashes restores both backups; any unknown hash aborts without
+overwrite. The manual rollback commands use the same classification as an
+auditable fallback, not the primary failure path.
 
 After restart, verify:
 

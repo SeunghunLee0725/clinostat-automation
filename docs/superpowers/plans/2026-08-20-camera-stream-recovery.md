@@ -259,13 +259,40 @@ SpaceBio gateway. Do not upload, copy, signal, or restart any gateway file or
 process. Reading the gateway PID before and after the incident is the only
 gateway operation allowed.
 
+- [ ] **Start one persistent Bash incident shell**
+
+The operator host login shell is zsh, but every Task 4 command block relies on
+Bash arrays and Bash trap scope. Run this command by itself and wait for the
+new prompt:
+
+```bash
+exec /bin/bash --noprofile --norc
+```
+
+Do not leave this Bash process or run later blocks in separate shells. The
+first block records its PID, and every later block verifies both Bash identity
+and that same PID before doing work.
+
 - [ ] **Step 1: Run pre-deployment verification**
 
 From the incident worktree, compile both deployable modules and run the focused
 camera/server tests plus the complete integration suite:
 
 ```bash
-set -euo pipefail
+if [ -z "${BASH_VERSION:-}" ] || [ -n "${ZSH_VERSION:-}" ]; then
+  printf 'Task 4 requires /bin/bash, not the host login shell\n' >&2
+  exit 1
+fi
+set -Eeuo pipefail
+INCIDENT_BASH_PID=$$
+readonly INCIDENT_BASH_PID
+incident_require_bash() {
+  [ -n "${BASH_VERSION:-}" ] \
+    && [ -z "${ZSH_VERSION:-}" ] \
+    && [ "${BASH_SUBSHELL:-1}" -eq 0 ] \
+    && [ "$$" -eq "$INCIDENT_BASH_PID" ]
+}
+incident_require_bash || exit 1
 cd /Users/lee_ai_labtop/.config/superpowers/worktrees/clinostat-automation/camera-stream-recovery/integration
 INCIDENT_PY='/Users/lee_ai_labtop/Desktop/과제수행_KIMS/(25-27)우주바이오/1_research_results/clinostat-automation/integration/.venv/bin/python'
 
@@ -291,7 +318,8 @@ require strict host-key checking, verify control and experiment are stopped,
 and record both service PIDs and both original file hashes:
 
 ```bash
-set -euo pipefail
+incident_require_bash || exit 1
+set -Eeuo pipefail
 INCIDENT_PI_HOST='100.77.1.42'
 INCIDENT_PI_USER='aiworker-1'
 INCIDENT_TARGET="${INCIDENT_PI_USER}@${INCIDENT_PI_HOST}"
@@ -342,6 +370,7 @@ Create adjacent, timestamped backups and prove that each backup hash matches the
 recorded original before uploading anything:
 
 ```bash
+incident_require_bash || exit 1
 INCIDENT_CAMERA_BACKUP="$INCIDENT_REMOTE_ROOT/camera.py.bak-$INCIDENT_STAMP"
 INCIDENT_SERVER_BACKUP="$INCIDENT_REMOTE_ROOT/server.py.bak-$INCIDENT_STAMP"
 ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
@@ -369,6 +398,7 @@ Upload into one timestamped staging directory on the same filesystem as the
 targets. Compile and hash both staged files before changing either live path:
 
 ```bash
+incident_require_bash || exit 1
 INCIDENT_LOCAL_CAMERA="$PWD/clinostat_extension/work/camera.py"
 INCIDENT_LOCAL_SERVER="$PWD/clinostat_extension/work/server.py"
 INCIDENT_NEW_CAMERA_SHA="$(shasum -a 256 "$INCIDENT_LOCAL_CAMERA" | awk '{print $1}')"
@@ -405,6 +435,7 @@ handoff and verifies rollback. Its traps disable themselves before rollback to
 prevent recursion.
 
 ```bash
+incident_require_bash || exit 1
 incident_rollback_pair() (
   set -euo pipefail
   printf 'automatic rollback: restoring camera.py and server.py\n' >&2
@@ -604,6 +635,7 @@ incident_rollback_guard() {
   local rollback_status
   trap - ERR EXIT
   trap '' HUP INT TERM
+  INCIDENT_ROLLBACK_REQUIRED=0
   set +e
   incident_rollback_pair
   rollback_status=$?
@@ -638,6 +670,7 @@ both validated backups on any error or signal. The running process continues
 using its already-imported modules until the pair is complete and verified.
 
 ```bash
+incident_require_bash || exit 1
 ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
   "$INCIDENT_REMOTE_ROOT" "$INCIDENT_REMOTE_STAGE" \
   "$INCIDENT_CAMERA_BACKUP" "$INCIDENT_SERVER_BACKUP" \
@@ -700,6 +733,7 @@ the install or live checks in a different shell.
 Confirm both final hashes once more while the automatic rollback is armed:
 
 ```bash
+incident_require_bash || exit 1
 test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
   "sha256sum '$INCIDENT_REMOTE_ROOT/camera.py' | awk '{print \$1}'")" = "$INCIDENT_NEW_CAMERA_SHA"
 test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
@@ -714,6 +748,7 @@ same remote shell, re-check stopped state, gateway identity, MainPID, service
 user, and the exact process argv before sending any signal:
 
 ```bash
+incident_require_bash || exit 1
 ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
   "$INCIDENT_CLINOSTAT_PID_BEFORE" "$INCIDENT_GATEWAY_PID_BEFORE" \
   <<'REMOTE_FORCE_LOAD'
@@ -769,6 +804,7 @@ Use one bounded localhost MJPEG client, sample status while that client owns the
 camera, and retain the response files until every assertion passes:
 
 ```bash
+incident_require_bash || exit 1
 INCIDENT_VERIFY_DIR="/tmp/clinostat-camera-verify-$INCIDENT_STAMP"
 case "$INCIDENT_VERIFY_DIR" in
   /tmp/clinostat-camera-verify-*) ;;
@@ -882,6 +918,7 @@ one graceful SIGTERM handoff. Revalidate the exact unit, PID, user, argv,
 stopped state, and gateway PID in the same shell before signaling:
 
 ```bash
+incident_require_bash || exit 1
 INCIDENT_GRACEFUL_PID_BEFORE="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
   'systemctl show clinostat.service -p MainPID --value')"
 test "$INCIDENT_GRACEFUL_PID_BEFORE" = "$INCIDENT_CLINOSTAT_PID_AFTER"
@@ -956,15 +993,18 @@ rollback and exits nonzero.
 The armed handler above is the primary failure path and runs before the
 incident shell can lose its unexported state. Keep the commands below as a
 line-by-line audited fallback for an operator who has reconstructed the exact
-printed `INCIDENT_*` values after diagnosing a failed automatic rollback. Do
-not execute this step after Step 6 disarms the trap successfully, and do not
-stack another fix. Validate both backup hashes and classify the live pair
-first: old/old skips file mutation and resumes handoff; any pair composed only
-of the recorded old/new hashes restores both backups; any unknown hash stops
-for drift escalation. Verify both old hashes before repeating the
-clinostat-only PID handoff. Never restart or signal the gateway.
+printed `INCIDENT_*` values after diagnosing a failed automatic rollback. A
+fresh fallback shell must first repeat the persistent Bash bootstrap and
+`incident_require_bash` definition from Step 1. Do not execute this step after
+Step 6 disarms the trap successfully, and do not stack another fix. Validate
+both backup hashes and classify the live pair first: old/old skips file
+mutation and resumes handoff; any pair composed only of the recorded old/new
+hashes restores both backups; any unknown hash stops for drift escalation.
+Verify both old hashes before repeating the clinostat-only PID handoff. Never
+restart or signal the gateway.
 
 ```bash
+incident_require_bash || exit 1
 test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
   "sha256sum '$INCIDENT_CAMERA_BACKUP' | awk '{print \$1}'")" = "$INCIDENT_OLD_CAMERA_SHA"
 test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
@@ -1054,6 +1094,7 @@ Re-check stopped state, gateway PID, unit user, process user, and exact argv in
 the same remote shell before signaling:
 
 ```bash
+incident_require_bash || exit 1
 test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
   'systemctl show clinostat.service -p Restart --value')" = 'always'
 INCIDENT_ROLLBACK_PID_BEFORE=''
