@@ -30,6 +30,7 @@ BACKUP_ROOT="/home/$PI_USER/spacebio-backups/$STAMP"
 GATEWAY_FILES=(gateway/*.py)
 #: 클리노스텟 프로세스 안에서 도는 확장. work/ 가 편집 가능한 원본이다.
 declare -a EXTENSION_PAIRS=(
+  "clinostat_extension/work/camera.py:$CLINOSTAT_ROOT/camera.py"
   "clinostat_extension/work/server.py:$CLINOSTAT_ROOT/server.py"
   "clinostat_extension/work/spacebio_proxy.py:$CLINOSTAT_ROOT/spacebio_proxy.py"
   "clinostat_extension/work/static/index.html:$CLINOSTAT_ROOT/static/index.html"
@@ -119,6 +120,7 @@ if [ "$FAILED" != "0" ]; then
 배포 후 검증에 실패했다. 되돌리려면:
 
   ssh $TARGET "cp -a $BACKUP_ROOT/gateway/. $GATEWAY_ROOT/gateway/ \\
+    && cp -a $BACKUP_ROOT/clinostat/camera.py $CLINOSTAT_ROOT/camera.py \\
     && cp -a $BACKUP_ROOT/clinostat/server.py $BACKUP_ROOT/clinostat/spacebio_proxy.py $CLINOSTAT_ROOT/ \\
     && cp -a $BACKUP_ROOT/clinostat/static/index.html $CLINOSTAT_ROOT/static/ \\
     && sudo systemctl restart spacebio-gateway.service clinostat.service"
