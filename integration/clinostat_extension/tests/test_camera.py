@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import importlib.util
 import sys
 import threading
@@ -246,6 +247,310 @@ def test_camera_snapshot_route_is_synchronous():
     )
 
     assert type(route) is ast.FunctionDef
+
+
+class TrackingCloseIterator:
+    def __init__(self, iterator, close_error=None):
+        self.iterator = iterator
+        self.close_error = close_error
+        self.close_calls = []
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self.iterator)
+
+    def close(self):
+        self.close_calls.append(threading.get_ident())
+        self.iterator.close()
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class StreamCamera:
+    def __init__(self, stream, camera=None):
+        self.stream = stream
+        self.camera = camera
+
+    def mjpeg_generator(self):
+        return self.stream
+
+    @property
+    def viewer_count(self):
+        if self.camera is None:
+            return None
+        return self.camera.viewer_count
+
+
+class RouteApp:
+    def get(self, *_args, **_kwargs):
+        return lambda route: route
+
+
+def load_camera_stream_route(stream_camera):
+    import anyio
+    from starlette.concurrency import run_in_threadpool
+    from starlette.responses import StreamingResponse
+
+    tree = ast.parse(WORK_SERVER.read_text(encoding='utf-8'))
+    selected = [
+        node
+        for node in tree.body
+        if (
+            isinstance(node, ast.ClassDef)
+            and node.name == 'CloseableStreamingResponse'
+        )
+        or (
+            isinstance(node, ast.AsyncFunctionDef)
+            and node.name == 'camera_stream'
+        )
+    ]
+    namespace = {
+        'anyio': anyio,
+        'StreamingResponse': StreamingResponse,
+        'run_in_threadpool': run_in_threadpool,
+        'camera': stream_camera,
+        'app': RouteApp(),
+    }
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[])),
+            WORK_SERVER,
+            'exec',
+        ),
+        namespace,
+    )
+    return namespace['camera_stream']
+
+
+def http_scope(spec_version):
+    return {
+        'type': 'http',
+        'asgi': {'version': '3.0', 'spec_version': spec_version},
+        'http_version': '1.1',
+        'method': 'GET',
+        'scheme': 'http',
+        'path': '/api/camera/stream',
+        'raw_path': b'/api/camera/stream',
+        'query_string': b'',
+        'root_path': '',
+        'headers': [],
+        'client': ('127.0.0.1', 12345),
+        'server': ('127.0.0.1', 8000),
+    }
+
+
+def test_camera_stream_disconnect_closes_generator_and_releases_viewer_promptly(
+    camera_module
+):
+    cam = camera_module.Camera(stream_stall_timeout_s=1.0)
+    cam._ensure_running = lambda: None
+    underlying = cam.mjpeg_generator()
+    tracked = TrackingCloseIterator(underlying)
+    route = load_camera_stream_route(StreamCamera(tracked, camera=cam))
+
+    async def scenario():
+        disconnect = asyncio.Event()
+        messages = []
+        loop_thread = threading.get_ident()
+
+        async def receive():
+            await disconnect.wait()
+            return {'type': 'http.disconnect'}
+
+        async def send(message):
+            messages.append(message)
+            if (
+                message['type'] == 'http.response.body'
+                and message.get('body')
+            ):
+                disconnect.set()
+
+        async def publish_after_viewer_enters():
+            deadline = asyncio.get_running_loop().time() + 0.5
+            while cam.viewer_count != 1:
+                assert asyncio.get_running_loop().time() < deadline
+                await asyncio.sleep(0)
+            with cam._frame_cond:
+                cam._latest_jpeg = b'fresh-frame'
+                cam._frame_seq += 1
+                cam._frame_cond.notify_all()
+
+        response = await route()
+        await asyncio.wait_for(
+            asyncio.gather(
+                response(http_scope('2.3'), receive, send),
+                publish_after_viewer_enters(),
+            ),
+            timeout=1.0,
+        )
+        return messages, loop_thread, cam.viewer_count, list(tracked.close_calls)
+
+    try:
+        messages, loop_thread, viewer_count, close_calls = asyncio.run(scenario())
+    finally:
+        underlying.close()
+
+    assert any(
+        message['type'] == 'http.response.body' and message.get('body')
+        for message in messages
+    )
+    assert viewer_count == 0
+    assert len(close_calls) == 1
+    assert close_calls[0] != loop_thread
+
+
+def test_camera_stream_natural_completion_closes_exactly_once_off_event_loop():
+    finalized = []
+
+    def finite_stream():
+        try:
+            yield b'one-frame'
+        finally:
+            finalized.append('finalized')
+
+    underlying = finite_stream()
+    tracked = TrackingCloseIterator(underlying)
+    route = load_camera_stream_route(StreamCamera(tracked))
+
+    async def scenario():
+        messages = []
+        loop_thread = threading.get_ident()
+
+        async def receive():
+            raise AssertionError('ASGI 2.4 response must not poll receive')
+
+        async def send(message):
+            messages.append(message)
+
+        response = await route()
+        await asyncio.wait_for(
+            response(http_scope('2.4'), receive, send),
+            timeout=1.0,
+        )
+        await asyncio.wait_for(
+            response(http_scope('2.4'), receive, send),
+            timeout=1.0,
+        )
+        return messages, loop_thread
+
+    messages, loop_thread = asyncio.run(scenario())
+
+    assert finalized == ['finalized']
+    assert len(tracked.close_calls) == 1
+    assert tracked.close_calls[0] != loop_thread
+    assert sum(
+        message['type'] == 'http.response.body'
+        and message.get('more_body') is False
+        for message in messages
+    ) == 2
+
+
+def test_camera_stream_send_error_closes_and_preserves_client_disconnect():
+    from starlette.requests import ClientDisconnect
+
+    finalized = []
+
+    def endless_stream():
+        try:
+            while True:
+                yield b'frame'
+        finally:
+            finalized.append('finalized')
+
+    underlying = endless_stream()
+    tracked = TrackingCloseIterator(
+        underlying,
+        close_error=RuntimeError('close also failed'),
+    )
+    route = load_camera_stream_route(StreamCamera(tracked))
+
+    async def scenario():
+        loop_thread = threading.get_ident()
+
+        async def receive():
+            raise AssertionError('ASGI 2.4 response must not poll receive')
+
+        async def send(message):
+            if (
+                message['type'] == 'http.response.body'
+                and message.get('body')
+            ):
+                raise OSError('client send failed')
+
+        response = await route()
+        with pytest.raises(ClientDisconnect):
+            await asyncio.wait_for(
+                response(http_scope('2.4'), receive, send),
+                timeout=1.0,
+            )
+        return loop_thread
+
+    try:
+        loop_thread = asyncio.run(scenario())
+    finally:
+        underlying.close()
+
+    assert finalized == ['finalized']
+    assert len(tracked.close_calls) == 1
+    assert tracked.close_calls[0] != loop_thread
+
+
+def test_camera_stream_task_group_cancellation_shields_iterator_close():
+    import anyio
+
+    finalized = []
+
+    def endless_stream():
+        try:
+            while True:
+                yield b'frame'
+        finally:
+            finalized.append('finalized')
+
+    underlying = endless_stream()
+    tracked = TrackingCloseIterator(
+        underlying,
+        close_error=RuntimeError('close during cancellation failed'),
+    )
+    route = load_camera_stream_route(StreamCamera(tracked))
+
+    async def scenario():
+        body_sent = anyio.Event()
+        loop_thread = threading.get_ident()
+
+        async def receive():
+            raise AssertionError('ASGI 2.4 response must not poll receive')
+
+        async def send(message):
+            if (
+                message['type'] == 'http.response.body'
+                and message.get('body')
+            ):
+                body_sent.set()
+                await anyio.sleep_forever()
+
+        response = await route()
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(
+                response,
+                http_scope('2.4'),
+                receive,
+                send,
+            )
+            await body_sent.wait()
+            task_group.cancel_scope.cancel()
+        return loop_thread
+
+    try:
+        loop_thread = anyio.run(scenario)
+    finally:
+        underlying.close()
+
+    assert finalized == ['finalized']
+    assert len(tracked.close_calls) == 1
+    assert tracked.close_calls[0] != loop_thread
 
 
 def test_constructor_accepts_camera_recovery_timings_and_clock(camera_module):

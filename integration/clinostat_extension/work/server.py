@@ -9,6 +9,7 @@ import asyncio
 import glob
 import json
 import math
+import anyio
 from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -19,6 +20,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from modbus_rtu import ACServo, BLDCMotor
 from sensor import WitMotionSensor
@@ -34,6 +36,37 @@ from fastapi.responses import JSONResponse
 from fastapi import Request
 import spacebio_proxy
 from spacebio_proxy import ProxyGatewayError, ProxyPathError
+
+
+class CloseableStreamingResponse(StreamingResponse):
+    """Close a synchronous response iterator when its ASGI lifecycle ends."""
+
+    def __init__(self, content, *args, **kwargs):
+        self._stream_close = getattr(content, "close", None)
+        self._stream_closed = False
+        super().__init__(content, *args, **kwargs)
+
+    async def _close_stream_once(self):
+        if self._stream_closed or not callable(self._stream_close):
+            return
+        self._stream_closed = True
+        with anyio.CancelScope(shield=True):
+            await run_in_threadpool(self._stream_close)
+
+    async def __call__(self, scope, receive, send):
+        response_failed = True
+        try:
+            await super().__call__(scope, receive, send)
+            response_failed = False
+        finally:
+            if response_failed:
+                try:
+                    await self._close_stream_once()
+                except BaseException:
+                    # Cleanup must not replace the response/send exception.
+                    pass
+            else:
+                await self._close_stream_once()
 
 # === 하드웨어 인스턴스 ===
 ac_servo = ACServo()
@@ -866,7 +899,7 @@ def camera_snapshot():
 async def camera_stream():
     """multipart/x-mixed-replace MJPEG 스트림 — <img src=...> 가 곧장 표시."""
     gen = camera.mjpeg_generator()
-    return StreamingResponse(
+    return CloseableStreamingResponse(
         gen,
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={"Cache-Control": "no-store"},
