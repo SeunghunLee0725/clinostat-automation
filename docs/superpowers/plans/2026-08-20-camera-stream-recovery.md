@@ -246,44 +246,592 @@ git add integration/clinostat_extension/work/camera.py \
 git commit -m "fix: recover stalled Picamera2 streams"
 ```
 
-### Task 4: Deploy only the camera fix and verify production
+### Task 4: Deploy the camera and stream-lifecycle fix as one incident unit
 
 **Files:**
 - Deploy: `integration/clinostat_extension/work/camera.py` to `/home/aiworker-1/clinostat/camera.py`
-- Backup: remote timestamped `camera.py.bak-<timestamp>`
+- Deploy: `integration/clinostat_extension/work/server.py` to `/home/aiworker-1/clinostat/server.py`
+- Backup: remote timestamped `camera.py.bak-<timestamp>` and `server.py.bak-<timestamp>`
+
+This is a two-file clinostat incident deployment. Never run
+`integration/deploy/deploy_to_pi.sh`: that script also deploys and restarts the
+SpaceBio gateway. Do not upload, copy, signal, or restart any gateway file or
+process. Reading the gateway PID before and after the incident is the only
+gateway operation allowed.
 
 - [ ] **Step 1: Run pre-deployment verification**
 
-Run the focused camera tests, complete integration suite, `git diff --check`, and `python -m py_compile` on the camera module. Confirm zero failures.
+From the incident worktree, compile both deployable modules and run the focused
+camera/server tests plus the complete integration suite:
+
+```bash
+set -euo pipefail
+cd /Users/lee_ai_labtop/.config/superpowers/worktrees/clinostat-automation/camera-stream-recovery/integration
+INCIDENT_PY='/Users/lee_ai_labtop/Desktop/과제수행_KIMS/(25-27)우주바이오/1_research_results/clinostat-automation/integration/.venv/bin/python'
+
+"$INCIDENT_PY" -m py_compile \
+  clinostat_extension/work/camera.py \
+  clinostat_extension/work/server.py
+"$INCIDENT_PY" -m pytest -q \
+  clinostat_extension/tests/test_camera.py \
+  clinostat_extension/tests/test_existing_contract.py \
+  clinostat_extension/tests/test_spacebio_routes.py \
+  clinostat_extension/tests/test_proxy_sessions.py
+"$INCIDENT_PY" -m pytest -q
+git -C .. diff --check
+test -z "$(git -C .. status --porcelain=v1)"
+```
+
+Stop if any command fails or the worktree is not clean.
 
 - [ ] **Step 2: Re-check operational safety**
 
-Query `/api/control/status` and `/api/experiment/status`. Require both `running=false`. Record the current clinostat PID and SpaceBio gateway PID.
+Run the rest of this task in the same local shell. Resolve the exact target,
+require strict host-key checking, verify control and experiment are stopped,
+and record both service PIDs and both original file hashes:
 
-- [ ] **Step 3: Back up and deploy only `camera.py`**
+```bash
+set -euo pipefail
+INCIDENT_PI_HOST='100.77.1.42'
+INCIDENT_PI_USER='aiworker-1'
+INCIDENT_TARGET="${INCIDENT_PI_USER}@${INCIDENT_PI_HOST}"
+INCIDENT_REMOTE_ROOT='/home/aiworker-1/clinostat'
+INCIDENT_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+INCIDENT_LOG_SINCE="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+INCIDENT_SSH=(-o BatchMode=yes -o StrictHostKeyChecking=yes)
+test "$INCIDENT_TARGET" = 'aiworker-1@100.77.1.42'
 
-Create a timestamped remote backup with `cp -a`, upload the verified file with `scp`, and verify the local and remote SHA-256 hashes match. Do not invoke `deploy_to_pi.sh` and do not touch gateway files.
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "curl -fsS --max-time 5 http://127.0.0.1:8000/api/control/status \
+   | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get(\"running\") is False, d'"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "curl -fsS --max-time 5 http://127.0.0.1:8000/api/experiment/status \
+   | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get(\"running\") is False, d'"
 
-- [ ] **Step 4: Restart only clinostat**
+INCIDENT_CLINOSTAT_PID_BEFORE="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  'systemctl show clinostat.service -p MainPID --value')"
+INCIDENT_GATEWAY_PID_BEFORE="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  'systemctl show spacebio-gateway.service -p MainPID --value')"
+test "$INCIDENT_CLINOSTAT_PID_BEFORE" -gt 0
+test "$INCIDENT_GATEWAY_PID_BEFORE" -gt 0
 
-Send `SIGTERM` to the user-owned clinostat MainPID. Poll `systemctl show clinostat -p MainPID` until a different nonzero PID is active. Confirm the recorded SpaceBio gateway PID did not change.
+INCIDENT_OLD_CAMERA_SHA="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/camera.py' | awk '{print \$1}'")"
+INCIDENT_OLD_SERVER_SHA="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/server.py' | awk '{print \$1}'")"
+test "${#INCIDENT_OLD_CAMERA_SHA}" -eq 64
+test "${#INCIDENT_OLD_SERVER_SHA}" -eq 64
+printf 'clinostat PID=%s gateway PID=%s camera old=%s server old=%s\n' \
+  "$INCIDENT_CLINOSTAT_PID_BEFORE" "$INCIDENT_GATEWAY_PID_BEFORE" \
+  "$INCIDENT_OLD_CAMERA_SHA" "$INCIDENT_OLD_SERVER_SHA"
+```
 
-- [ ] **Step 5: Verify live recovery criteria**
+Do not continue if either status is running, either PID is zero, or either hash
+is missing.
 
-Require all of the following:
+- [ ] **Step 3: Create and validate timestamped backups of both files**
 
-- camera status reaches `healthy=true` with `error=null`;
-- frame sequence increases across two status samples;
-- two fresh snapshots are valid JPEGs and have different hashes;
-- a 3-second MJPEG request contains at least three `--frame` boundaries;
-- viewer count returns to its pre-request value after the client disconnects;
-- control and experiment remain stopped;
-- recent service logs contain no traceback or camera recovery error.
+Create adjacent, timestamped backups and prove that each backup hash matches the
+recorded original before uploading anything:
 
-- [ ] **Step 6: Roll back on any failed production criterion**
+```bash
+INCIDENT_CAMERA_BACKUP="$INCIDENT_REMOTE_ROOT/camera.py.bak-$INCIDENT_STAMP"
+INCIDENT_SERVER_BACKUP="$INCIDENT_REMOTE_ROOT/server.py.bak-$INCIDENT_STAMP"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "set -eu
+   test ! -e '$INCIDENT_CAMERA_BACKUP'
+   test ! -e '$INCIDENT_SERVER_BACKUP'
+   cp -a '$INCIDENT_REMOTE_ROOT/camera.py' '$INCIDENT_CAMERA_BACKUP'
+   cp -a '$INCIDENT_REMOTE_ROOT/server.py' '$INCIDENT_SERVER_BACKUP'
+   test -s '$INCIDENT_CAMERA_BACKUP'
+   test -s '$INCIDENT_SERVER_BACKUP'"
 
-If verification fails, restore the timestamped backup, restart only clinostat by the same PID handoff, and report both the failed check and rollback result. Do not stack speculative fixes in production.
+INCIDENT_BACKUP_CAMERA_SHA="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_CAMERA_BACKUP' | awk '{print \$1}'")"
+INCIDENT_BACKUP_SERVER_SHA="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_SERVER_BACKUP' | awk '{print \$1}'")"
+test "$INCIDENT_BACKUP_CAMERA_SHA" = "$INCIDENT_OLD_CAMERA_SHA"
+test "$INCIDENT_BACKUP_SERVER_SHA" = "$INCIDENT_OLD_SERVER_SHA"
+```
 
-- [ ] **Step 7: Commit any verification-only documentation adjustment**
+- [ ] **Step 4: Stage, compile, hash, and commit both files together**
+
+Upload into one timestamped staging directory on the same filesystem as the
+targets. Compile and hash both staged files before changing either live path:
+
+```bash
+INCIDENT_LOCAL_CAMERA="$PWD/clinostat_extension/work/camera.py"
+INCIDENT_LOCAL_SERVER="$PWD/clinostat_extension/work/server.py"
+INCIDENT_NEW_CAMERA_SHA="$(shasum -a 256 "$INCIDENT_LOCAL_CAMERA" | awk '{print $1}')"
+INCIDENT_NEW_SERVER_SHA="$(shasum -a 256 "$INCIDENT_LOCAL_SERVER" | awk '{print $1}')"
+INCIDENT_REMOTE_STAGE="$INCIDENT_REMOTE_ROOT/.camera-stream-recovery-$INCIDENT_STAMP"
+case "$INCIDENT_REMOTE_STAGE" in
+  "$INCIDENT_REMOTE_ROOT"/.camera-stream-recovery-*) ;;
+  *) exit 1 ;;
+esac
+
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "set -eu; umask 077; test ! -e '$INCIDENT_REMOTE_STAGE'; mkdir '$INCIDENT_REMOTE_STAGE'"
+scp "${INCIDENT_SSH[@]}" "$INCIDENT_LOCAL_CAMERA" \
+  "$INCIDENT_TARGET:$INCIDENT_REMOTE_STAGE/camera.py"
+scp "${INCIDENT_SSH[@]}" "$INCIDENT_LOCAL_SERVER" \
+  "$INCIDENT_TARGET:$INCIDENT_REMOTE_STAGE/server.py"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "set -eu
+   python3 -m py_compile \
+     '$INCIDENT_REMOTE_STAGE/camera.py' \
+     '$INCIDENT_REMOTE_STAGE/server.py'
+   test \"\$(sha256sum '$INCIDENT_REMOTE_STAGE/camera.py' | awk '{print \$1}')\" = '$INCIDENT_NEW_CAMERA_SHA'
+   test \"\$(sha256sum '$INCIDENT_REMOTE_STAGE/server.py' | awk '{print \$1}')\" = '$INCIDENT_NEW_SERVER_SHA'"
+```
+
+Commit the two files with two atomic renames inside one remote shell. A POSIX
+filesystem cannot atomically rename two paths as a single primitive, so the
+shell installs both before any restart and restores both validated backups on
+any error or signal. The running process continues using its already-imported
+modules until the pair is complete and verified.
+
+```bash
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
+  "$INCIDENT_REMOTE_ROOT" "$INCIDENT_REMOTE_STAGE" \
+  "$INCIDENT_CAMERA_BACKUP" "$INCIDENT_SERVER_BACKUP" \
+  "$INCIDENT_NEW_CAMERA_SHA" "$INCIDENT_NEW_SERVER_SHA" \
+  "$INCIDENT_OLD_CAMERA_SHA" "$INCIDENT_OLD_SERVER_SHA" \
+  "$INCIDENT_STAMP" <<'REMOTE_INSTALL'
+set -euo pipefail
+root=$1
+stage=$2
+camera_backup=$3
+server_backup=$4
+camera_new_sha=$5
+server_new_sha=$6
+camera_old_sha=$7
+server_old_sha=$8
+stamp=$9
+committed=0
+
+restore_pair() {
+  cp -a "$camera_backup" "$root/.camera.py.restore-$stamp"
+  cp -a "$server_backup" "$root/.server.py.restore-$stamp"
+  mv -f -- "$root/.camera.py.restore-$stamp" "$root/camera.py"
+  mv -f -- "$root/.server.py.restore-$stamp" "$root/server.py"
+}
+finish_install() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [ "$committed" -ne 1 ]; then
+    restore_pair
+  fi
+  exit "$status"
+}
+test "$(sha256sum "$stage/camera.py" | awk '{print $1}')" = "$camera_new_sha"
+test "$(sha256sum "$stage/server.py" | awk '{print $1}')" = "$server_new_sha"
+test "$(sha256sum "$root/camera.py" | awk '{print $1}')" = "$camera_old_sha"
+test "$(sha256sum "$root/server.py" | awk '{print $1}')" = "$server_old_sha"
+test "$(sha256sum "$camera_backup" | awk '{print $1}')" = "$camera_old_sha"
+test "$(sha256sum "$server_backup" | awk '{print $1}')" = "$server_old_sha"
+trap finish_install EXIT
+trap 'exit 1' HUP INT TERM
+mv -f -- "$stage/camera.py" "$root/camera.py"
+mv -f -- "$stage/server.py" "$root/server.py"
+test "$(sha256sum "$root/camera.py" | awk '{print $1}')" = "$camera_new_sha"
+test "$(sha256sum "$root/server.py" | awk '{print $1}')" = "$server_new_sha"
+committed=1
+trap - EXIT HUP INT TERM
+python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' "$stage" || true
+REMOTE_INSTALL
+```
+
+Do not restart if this transaction fails. Confirm both final hashes once more
+before proceeding:
+
+```bash
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/camera.py' | awk '{print \$1}'")" = "$INCIDENT_NEW_CAMERA_SHA"
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/server.py' | awk '{print \$1}'")" = "$INCIDENT_NEW_SERVER_SHA"
+```
+
+- [ ] **Step 5: Load the pair with an exact validated clinostat SIGKILL**
+
+The rolled-back production code has already hung during graceful SIGTERM, so
+the initial load uses the explicitly authorized exact MainPID SIGKILL. In the
+same remote shell, re-check stopped state, gateway identity, MainPID, service
+user, and the exact process argv before sending any signal:
+
+```bash
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
+  "$INCIDENT_CLINOSTAT_PID_BEFORE" "$INCIDENT_GATEWAY_PID_BEFORE" \
+  <<'REMOTE_FORCE_LOAD'
+set -euo pipefail
+expected_pid=$1
+expected_gateway_pid=$2
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/control/status \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("running") is False, d'
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/experiment/status \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("running") is False, d'
+systemctl is-active --quiet clinostat.service
+test "$(systemctl show clinostat.service -p Restart --value)" = 'always'
+test "$(systemctl show spacebio-gateway.service -p MainPID --value)" = \
+  "$expected_gateway_pid"
+test "$(systemctl show clinostat.service -p User --value)" = 'aiworker-1'
+current_pid="$(systemctl show clinostat.service -p MainPID --value)"
+test "$current_pid" = "$expected_pid"
+test "$current_pid" -gt 0
+process_uid="$(awk '/^Uid:/{print $2; exit}' "/proc/$current_pid/status")"
+test "$process_uid" = "$(id -u aiworker-1)"
+python3 - "$current_pid" <<'PROCESS_CHECK'
+import pathlib
+import sys
+
+pid = sys.argv[1]
+argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().rstrip(b"\0").split(b"\0")
+assert argv == [b"/usr/bin/python3", b"/home/aiworker-1/clinostat/server.py"], argv
+PROCESS_CHECK
+kill -KILL -- "$current_pid"
+REMOTE_FORCE_LOAD
+INCIDENT_CLINOSTAT_PID_AFTER=''
+for _attempt in $(seq 1 60); do
+  INCIDENT_CLINOSTAT_PID_AFTER="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    'systemctl show clinostat.service -p MainPID --value')"
+  if [ "$INCIDENT_CLINOSTAT_PID_AFTER" -gt 0 ] \
+     && [ "$INCIDENT_CLINOSTAT_PID_AFTER" != "$INCIDENT_CLINOSTAT_PID_BEFORE" ] \
+     && ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+       'systemctl is-active --quiet clinostat.service'; then
+    break
+  fi
+  sleep 0.25
+done
+test "$INCIDENT_CLINOSTAT_PID_AFTER" -gt 0
+test "$INCIDENT_CLINOSTAT_PID_AFTER" != "$INCIDENT_CLINOSTAT_PID_BEFORE"
+INCIDENT_GATEWAY_PID_AFTER="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  'systemctl show spacebio-gateway.service -p MainPID --value')"
+test "$INCIDENT_GATEWAY_PID_AFTER" = "$INCIDENT_GATEWAY_PID_BEFORE"
+```
+
+- [ ] **Step 6: Verify live recovery criteria**
+
+Use one bounded localhost MJPEG client, sample status while that client owns the
+camera, and retain the response files until every assertion passes:
+
+```bash
+INCIDENT_VERIFY_DIR="/tmp/clinostat-camera-verify-$INCIDENT_STAMP"
+case "$INCIDENT_VERIFY_DIR" in
+  /tmp/clinostat-camera-verify-*) ;;
+  *) exit 1 ;;
+esac
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "set -eu; umask 077; test ! -e '$INCIDENT_VERIFY_DIR'; mkdir '$INCIDENT_VERIFY_DIR'"
+
+INCIDENT_VIEWERS_BEFORE="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "curl -fsS --max-time 5 http://127.0.0.1:8000/api/camera/status \
+   | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"viewers\"])'")"
+test "$INCIDENT_VIEWERS_BEFORE" -eq 0
+
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "set -eu
+   stream_rc=0
+   curl -fsS --max-time 3 \
+     http://127.0.0.1:8000/api/camera/stream \
+     > '$INCIDENT_VERIFY_DIR/stream.mjpeg' || stream_rc=\$?
+   test \"\$stream_rc\" -eq 28" &
+INCIDENT_STREAM_JOB=$!
+
+INCIDENT_FRAME_SEQ_ONE=''
+for _attempt in $(seq 1 50); do
+  if INCIDENT_FRAME_SEQ_ONE="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    "curl -fsS --max-time 2 http://127.0.0.1:8000/api/camera/status \
+     | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"healthy\"] is True and d[\"error\"] is None, d; print(d[\"frame_sequence\"])'")"; then
+    break
+  fi
+  sleep 0.1
+done
+test -n "$INCIDENT_FRAME_SEQ_ONE"
+sleep 0.25
+INCIDENT_FRAME_SEQ_TWO="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "curl -fsS --max-time 2 http://127.0.0.1:8000/api/camera/status \
+   | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"healthy\"] is True and d[\"error\"] is None, d; print(d[\"frame_sequence\"])'")"
+test "$INCIDENT_FRAME_SEQ_TWO" -gt "$INCIDENT_FRAME_SEQ_ONE"
+wait "$INCIDENT_STREAM_JOB"
+
+INCIDENT_BOUNDARIES="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes().count(b\"--frame\"))' \
+   '$INCIDENT_VERIFY_DIR/stream.mjpeg'")"
+test "$INCIDENT_BOUNDARIES" -ge 3
+
+INCIDENT_VIEWERS_AFTER=''
+for _attempt in $(seq 1 50); do
+  INCIDENT_VIEWERS_AFTER="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    "curl -fsS --max-time 2 http://127.0.0.1:8000/api/camera/status \
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"viewers\"])'")"
+  if [ "$INCIDENT_VIEWERS_AFTER" = "$INCIDENT_VIEWERS_BEFORE" ]; then
+    break
+  fi
+  sleep 0.1
+done
+test "$INCIDENT_VIEWERS_AFTER" -eq 0
+
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  bash -s -- "$INCIDENT_VERIFY_DIR" <<'REMOTE_SNAPSHOT_CHECK'
+set -euo pipefail
+verify_dir=$1
+frame_sequence() {
+  curl -fsS --max-time 5 http://127.0.0.1:8000/api/camera/status \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["frame_sequence"])'
+}
+
+before="$(frame_sequence)"
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/camera/snapshot \
+  > "$verify_dir/snapshot-1.jpg"
+after_one="$(frame_sequence)"
+test "$after_one" -gt "$before"
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/camera/snapshot \
+  > "$verify_dir/snapshot-2.jpg"
+after_two="$(frame_sequence)"
+test "$after_two" -gt "$after_one"
+python3 -c 'import pathlib,sys
+for name in sys.argv[1:]:
+    data=pathlib.Path(name).read_bytes()
+    assert data.startswith(b"\xff\xd8") and data.endswith(b"\xff\xd9"), name' \
+  "$verify_dir/snapshot-1.jpg" \
+  "$verify_dir/snapshot-2.jpg"
+REMOTE_SNAPSHOT_CHECK
+
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "curl -fsS --max-time 5 http://127.0.0.1:8000/api/control/status \
+   | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get(\"running\") is False, d'"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "curl -fsS --max-time 5 http://127.0.0.1:8000/api/experiment/status \
+   | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get(\"running\") is False, d'"
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  'systemctl show spacebio-gateway.service -p MainPID --value')" = "$INCIDENT_GATEWAY_PID_BEFORE"
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/camera.py' | awk '{print \$1}'")" = "$INCIDENT_NEW_CAMERA_SHA"
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/server.py' | awk '{print \$1}'")" = "$INCIDENT_NEW_SERVER_SHA"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
+  "$INCIDENT_LOG_SINCE" <<'REMOTE_LOG_CHECK'
+set -euo pipefail
+since=$1
+logs="$(journalctl -u clinostat.service --since "$since" --no-pager)"
+if grep -E 'Traceback|camera.*(failed|error)' <<<"$logs"; then
+  exit 1
+fi
+REMOTE_LOG_CHECK
+```
+
+After these checks pass with viewers at zero, require the new code to complete
+one graceful SIGTERM handoff. Revalidate the exact unit, PID, user, argv,
+stopped state, and gateway PID in the same shell before signaling:
+
+```bash
+INCIDENT_GRACEFUL_PID_BEFORE="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  'systemctl show clinostat.service -p MainPID --value')"
+test "$INCIDENT_GRACEFUL_PID_BEFORE" = "$INCIDENT_CLINOSTAT_PID_AFTER"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
+  "$INCIDENT_GRACEFUL_PID_BEFORE" "$INCIDENT_GATEWAY_PID_BEFORE" \
+  <<'REMOTE_GRACEFUL_CHECK'
+set -euo pipefail
+expected_pid=$1
+expected_gateway_pid=$2
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/control/status \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("running") is False, d'
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/experiment/status \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("running") is False, d'
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/camera/status \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["viewers"] == 0, d'
+systemctl is-active --quiet clinostat.service
+test "$(systemctl show clinostat.service -p Restart --value)" = 'always'
+test "$(systemctl show spacebio-gateway.service -p MainPID --value)" = \
+  "$expected_gateway_pid"
+test "$(systemctl show clinostat.service -p User --value)" = 'aiworker-1'
+current_pid="$(systemctl show clinostat.service -p MainPID --value)"
+test "$current_pid" = "$expected_pid"
+test "$current_pid" -gt 0
+process_uid="$(awk '/^Uid:/{print $2; exit}' "/proc/$current_pid/status")"
+test "$process_uid" = "$(id -u aiworker-1)"
+python3 - "$current_pid" <<'PROCESS_CHECK'
+import pathlib
+import sys
+
+pid = sys.argv[1]
+argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().rstrip(b"\0").split(b"\0")
+assert argv == [b"/usr/bin/python3", b"/home/aiworker-1/clinostat/server.py"], argv
+PROCESS_CHECK
+kill -TERM -- "$current_pid"
+REMOTE_GRACEFUL_CHECK
+
+INCIDENT_GRACEFUL_PID_AFTER=''
+for _attempt in $(seq 1 60); do
+  INCIDENT_GRACEFUL_PID_AFTER="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    'systemctl show clinostat.service -p MainPID --value')"
+  if [ "$INCIDENT_GRACEFUL_PID_AFTER" -gt 0 ] \
+     && [ "$INCIDENT_GRACEFUL_PID_AFTER" != "$INCIDENT_GRACEFUL_PID_BEFORE" ] \
+     && ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+       'systemctl is-active --quiet clinostat.service'; then
+    break
+  fi
+  sleep 0.25
+done
+test "$INCIDENT_GRACEFUL_PID_AFTER" -gt 0
+test "$INCIDENT_GRACEFUL_PID_AFTER" != "$INCIDENT_GRACEFUL_PID_BEFORE"
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  'systemctl show spacebio-gateway.service -p MainPID --value')" = "$INCIDENT_GATEWAY_PID_BEFORE"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "curl -fsS --max-time 5 http://127.0.0.1:8000/api/camera/status \
+   | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"viewers\"] == 0, d'"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "python3 -c 'import pathlib,shutil,sys
+path=pathlib.Path(sys.argv[1])
+assert str(path).startswith(\"/tmp/clinostat-camera-verify-\")
+shutil.rmtree(path)' '$INCIDENT_VERIFY_DIR'"
+```
+
+On failure, retain the exact verification directory for the rollback report.
+Do not use a broad /tmp wildcard.
+
+- [ ] **Step 7: Roll back both files on any failed production criterion**
+
+If any live criterion fails, do not stack another fix. Validate both backup
+hashes again, copy both into temporary rollback paths, atomically replace both
+live paths in one remote shell, verify both old hashes, and only then repeat the
+clinostat-only PID handoff. Never restart or signal the gateway.
+
+```bash
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_CAMERA_BACKUP' | awk '{print \$1}'")" = "$INCIDENT_OLD_CAMERA_SHA"
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_SERVER_BACKUP' | awk '{print \$1}'")" = "$INCIDENT_OLD_SERVER_SHA"
+
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
+  "$INCIDENT_REMOTE_ROOT" "$INCIDENT_CAMERA_BACKUP" \
+  "$INCIDENT_SERVER_BACKUP" "$INCIDENT_OLD_CAMERA_SHA" \
+  "$INCIDENT_OLD_SERVER_SHA" "$INCIDENT_NEW_CAMERA_SHA" \
+  "$INCIDENT_NEW_SERVER_SHA" "$INCIDENT_STAMP" <<'REMOTE_ROLLBACK'
+set -euo pipefail
+root=$1
+camera_backup=$2
+server_backup=$3
+camera_old_sha=$4
+server_old_sha=$5
+camera_new_sha=$6
+server_new_sha=$7
+stamp=$8
+committed=0
+
+restore_new_pair() {
+  mv -f -- "$root/.camera.py.pre-rollback-$stamp" "$root/camera.py"
+  mv -f -- "$root/.server.py.pre-rollback-$stamp" "$root/server.py"
+}
+finish_rollback() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [ "$committed" -ne 1 ]; then
+    restore_new_pair
+  fi
+  exit "$status"
+}
+
+test "$(sha256sum "$camera_backup" | awk '{print $1}')" = "$camera_old_sha"
+test "$(sha256sum "$server_backup" | awk '{print $1}')" = "$server_old_sha"
+test "$(sha256sum "$root/camera.py" | awk '{print $1}')" = "$camera_new_sha"
+test "$(sha256sum "$root/server.py" | awk '{print $1}')" = "$server_new_sha"
+cp -a "$root/camera.py" "$root/.camera.py.pre-rollback-$stamp"
+cp -a "$root/server.py" "$root/.server.py.pre-rollback-$stamp"
+cp -a "$camera_backup" "$root/.camera.py.rollback-$stamp"
+cp -a "$server_backup" "$root/.server.py.rollback-$stamp"
+trap finish_rollback EXIT
+trap 'exit 1' HUP INT TERM
+mv -f -- "$root/.camera.py.rollback-$stamp" "$root/camera.py"
+mv -f -- "$root/.server.py.rollback-$stamp" "$root/server.py"
+test "$(sha256sum "$root/camera.py" | awk '{print $1}')" = "$camera_old_sha"
+test "$(sha256sum "$root/server.py" | awk '{print $1}')" = "$server_old_sha"
+committed=1
+trap - EXIT HUP INT TERM
+rm -f -- \
+  "$root/.camera.py.pre-rollback-$stamp" \
+  "$root/.server.py.pre-rollback-$stamp"
+REMOTE_ROLLBACK
+```
+
+Because rollback may be recovering from a failed graceful-shutdown criterion,
+use the exact validated clinostat MainPID SIGKILL for the rollback handoff.
+Re-check stopped state, gateway PID, unit user, process user, and exact argv in
+the same remote shell before signaling:
+
+```bash
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  'systemctl show clinostat.service -p Restart --value')" = 'always'
+INCIDENT_ROLLBACK_PID_BEFORE=''
+for _attempt in $(seq 1 60); do
+  INCIDENT_ROLLBACK_PID_BEFORE="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    'systemctl show clinostat.service -p MainPID --value')"
+  if [ "$INCIDENT_ROLLBACK_PID_BEFORE" -gt 0 ] \
+     && ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+       'systemctl is-active --quiet clinostat.service'; then
+    break
+  fi
+  sleep 0.25
+done
+test "$INCIDENT_ROLLBACK_PID_BEFORE" -gt 0
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
+  "$INCIDENT_ROLLBACK_PID_BEFORE" "$INCIDENT_GATEWAY_PID_BEFORE" \
+  <<'REMOTE_ROLLBACK_RESTART'
+set -euo pipefail
+expected_pid=$1
+expected_gateway_pid=$2
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/control/status \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("running") is False, d'
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/experiment/status \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("running") is False, d'
+systemctl is-active --quiet clinostat.service
+test "$(systemctl show clinostat.service -p Restart --value)" = 'always'
+test "$(systemctl show spacebio-gateway.service -p MainPID --value)" = \
+  "$expected_gateway_pid"
+test "$(systemctl show clinostat.service -p User --value)" = 'aiworker-1'
+current_pid="$(systemctl show clinostat.service -p MainPID --value)"
+test "$current_pid" = "$expected_pid"
+test "$current_pid" -gt 0
+process_uid="$(awk '/^Uid:/{print $2; exit}' "/proc/$current_pid/status")"
+test "$process_uid" = "$(id -u aiworker-1)"
+python3 - "$current_pid" <<'PROCESS_CHECK'
+import pathlib
+import sys
+
+pid = sys.argv[1]
+argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().rstrip(b"\0").split(b"\0")
+assert argv == [b"/usr/bin/python3", b"/home/aiworker-1/clinostat/server.py"], argv
+PROCESS_CHECK
+kill -KILL -- "$current_pid"
+REMOTE_ROLLBACK_RESTART
+
+INCIDENT_ROLLBACK_PID_AFTER=''
+for _attempt in $(seq 1 60); do
+  INCIDENT_ROLLBACK_PID_AFTER="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    'systemctl show clinostat.service -p MainPID --value')"
+  if [ "$INCIDENT_ROLLBACK_PID_AFTER" -gt 0 ] \
+     && [ "$INCIDENT_ROLLBACK_PID_AFTER" != "$INCIDENT_ROLLBACK_PID_BEFORE" ] \
+     && ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+       'systemctl is-active --quiet clinostat.service'; then
+    break
+  fi
+  sleep 0.25
+done
+test "$INCIDENT_ROLLBACK_PID_AFTER" -gt 0
+test "$INCIDENT_ROLLBACK_PID_AFTER" != "$INCIDENT_ROLLBACK_PID_BEFORE"
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/camera.py' | awk '{print \$1}'")" = "$INCIDENT_OLD_CAMERA_SHA"
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/server.py' | awk '{print \$1}'")" = "$INCIDENT_OLD_SERVER_SHA"
+test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  'systemctl show spacebio-gateway.service -p MainPID --value')" = "$INCIDENT_GATEWAY_PID_BEFORE"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  'curl -fsS --max-time 5 http://127.0.0.1:8000/ -o /dev/null'
+```
+
+Report the failed criterion, both restored hashes, both rollback clinostat PIDs,
+and the unchanged gateway PID.
+
+- [ ] **Step 8: Commit any verification-only documentation adjustment**
 
 Do not commit runtime artifacts or remote backups. Leave the branch clean.

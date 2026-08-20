@@ -341,7 +341,7 @@ def http_scope(spec_version):
     }
 
 
-def test_camera_stream_disconnect_closes_generator_and_releases_viewer_promptly(
+def test_camera_stream_disconnect_after_chunk_closes_generator_and_releases_viewer(
     camera_module
 ):
     cam = camera_module.Camera(stream_stall_timeout_s=1.0)
@@ -399,6 +399,103 @@ def test_camera_stream_disconnect_closes_generator_and_releases_viewer_promptly(
     assert viewer_count == 0
     assert len(close_calls) == 1
     assert close_calls[0] != loop_thread
+
+
+def test_camera_stream_cancel_waits_for_inflight_next_before_closing(camera_module):
+    import anyio
+
+    class SecondFrameWaitCondition(threading.Condition):
+        def __init__(self):
+            super().__init__()
+            self.wait_calls = 0
+            self.second_wait_started = threading.Event()
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.wait_calls == 2:
+                self.second_wait_started.set()
+            return super().wait(timeout)
+
+    cam = camera_module.Camera(stream_stall_timeout_s=1.0)
+    cam._ensure_running = lambda: None
+    frame_condition = SecondFrameWaitCondition()
+    cam._frame_cond = frame_condition
+    baseline_viewers = cam.viewer_count
+    underlying = cam.mjpeg_generator()
+    tracked = TrackingCloseIterator(underlying)
+    route = load_camera_stream_route(StreamCamera(tracked, camera=cam))
+
+    async def scenario():
+        first_body_sent = anyio.Event()
+        response_finished = anyio.Event()
+        loop_thread = threading.get_ident()
+
+        async def receive():
+            raise AssertionError('ASGI 2.4 response must not poll receive')
+
+        async def send(message):
+            if (
+                message['type'] == 'http.response.body'
+                and message.get('body')
+            ):
+                first_body_sent.set()
+
+        async def run_response(response):
+            try:
+                await response(http_scope('2.4'), receive, send)
+            finally:
+                response_finished.set()
+
+        async def publish(sequence):
+            with cam._frame_cond:
+                cam._latest_jpeg = b'fresh-frame'
+                cam._frame_seq = sequence
+                cam._frame_cond.notify_all()
+
+        response = await route()
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(run_response, response)
+            with anyio.fail_after(2.0):
+                while cam.viewer_count != baseline_viewers + 1:
+                    await anyio.sleep(0)
+            await publish(1)
+            await first_body_sent.wait()
+            with anyio.fail_after(2.0):
+                while not frame_condition.second_wait_started.is_set():
+                    await anyio.sleep(0)
+
+            task_group.cancel_scope.cancel()
+            with anyio.CancelScope(shield=True):
+                await anyio.sleep(0)
+                close_calls_while_next_running = list(tracked.close_calls)
+                viewers_while_next_running = cam.viewer_count
+                response_done_while_next_running = response_finished.is_set()
+                await publish(2)
+                with anyio.fail_after(2.0):
+                    await response_finished.wait()
+                final_viewers = cam.viewer_count
+
+        return {
+            'loop_thread': loop_thread,
+            'close_calls_while_next_running': close_calls_while_next_running,
+            'viewers_while_next_running': viewers_while_next_running,
+            'response_done_while_next_running': response_done_while_next_running,
+            'final_viewers': final_viewers,
+            'close_calls': list(tracked.close_calls),
+        }
+
+    try:
+        observed = anyio.run(scenario)
+    finally:
+        underlying.close()
+
+    assert frame_condition.wait_calls == 2
+    assert observed['close_calls_while_next_running'] == []
+    assert observed['viewers_while_next_running'] == baseline_viewers + 1
+    assert observed['response_done_while_next_running'] is False
+    assert observed['final_viewers'] == baseline_viewers
+    assert len(observed['close_calls']) == 1
+    assert observed['close_calls'][0] != observed['loop_thread']
 
 
 def test_camera_stream_natural_completion_closes_exactly_once_off_event_loop():
