@@ -271,6 +271,329 @@ def test_constructor_accepts_camera_recovery_timings_and_clock(camera_module):
     assert configured._clock is fake_clock
 
 
+def test_unicam_detection_uses_sysfs_name_and_missing_device_is_safe(
+    camera_module, tmp_path
+):
+    sysfs_root = tmp_path / 'video4linux'
+    video0 = sysfs_root / 'video0'
+    video0.mkdir(parents=True)
+    (video0 / 'name').write_text('unicam-image\n', encoding='utf-8')
+    video1 = sysfs_root / 'video1'
+    (video1 / 'device').mkdir(parents=True)
+    (video1 / 'name').write_text('camera capture\n', encoding='utf-8')
+    unicam_driver = tmp_path / 'drivers' / 'unicam'
+    unicam_driver.mkdir(parents=True)
+    (video1 / 'device' / 'driver').symlink_to(
+        unicam_driver,
+        target_is_directory=True,
+    )
+
+    assert camera_module._is_unicam_device(
+        '/dev/video0',
+        sysfs_root=sysfs_root,
+    ) is True
+    assert camera_module._is_unicam_device(
+        '/dev/video1',
+        sysfs_root=sysfs_root,
+    ) is True
+    assert camera_module._is_unicam_device(
+        '/dev/video9',
+        sysfs_root=sysfs_root,
+    ) is False
+
+
+def test_viewer_entry_and_disconnect_do_not_wait_for_blocked_open(camera_module):
+    open_started = threading.Event()
+    release_open = threading.Event()
+    viewer_entered = threading.Event()
+    allow_disconnect = threading.Event()
+    viewer_finished = threading.Event()
+    cam = camera_module.Camera(idle_close_s=-1.0)
+
+    def blocked_open():
+        open_started.set()
+        assert release_open.wait(timeout=1.0)
+        return False
+
+    def view_camera():
+        with cam.viewer():
+            viewer_entered.set()
+            assert allow_disconnect.wait(timeout=1.0)
+        viewer_finished.set()
+
+    cam._open = blocked_open
+    viewer_thread = threading.Thread(target=view_camera, daemon=True)
+    viewer_thread.start()
+    assert open_started.wait(timeout=0.5)
+    entered_while_open_blocked = viewer_entered.wait(timeout=0.3)
+    allow_disconnect.set()
+    disconnected_while_open_blocked = viewer_finished.wait(timeout=0.3)
+    viewer_count_after_disconnect = cam.viewer_count
+
+    release_open.set()
+    viewer_thread.join(timeout=0.5)
+    cam.stop()
+
+    assert entered_while_open_blocked is True
+    assert disconnected_while_open_blocked is True
+    assert viewer_count_after_disconnect == 0
+    assert viewer_thread.is_alive() is False
+
+
+def test_status_remains_responsive_while_worker_open_is_blocked(camera_module):
+    open_started = threading.Event()
+    release_open = threading.Event()
+    viewer_entered = threading.Event()
+    release_viewer = threading.Event()
+    status_finished = threading.Event()
+    statuses = []
+    cam = camera_module.Camera()
+
+    def blocked_open():
+        open_started.set()
+        assert release_open.wait(timeout=1.0)
+        return False
+
+    def view_camera():
+        with cam.viewer():
+            viewer_entered.set()
+            release_viewer.wait(timeout=1.0)
+
+    def read_status():
+        statuses.append(cam.status())
+        status_finished.set()
+
+    cam._open = blocked_open
+    viewer_thread = threading.Thread(target=view_camera, daemon=True)
+    viewer_thread.start()
+    assert open_started.wait(timeout=0.5)
+    status_thread = threading.Thread(target=read_status, daemon=True)
+    status_thread.start()
+    status_returned_while_open_blocked = status_finished.wait(timeout=0.3)
+
+    release_open.set()
+    release_viewer.set()
+    viewer_thread.join(timeout=0.5)
+    status_thread.join(timeout=0.5)
+    cam.stop()
+
+    assert status_returned_while_open_blocked is True
+    assert status_thread.is_alive() is False
+    assert statuses and statuses[0]['open'] is False
+
+
+def test_disconnected_viewer_causes_inflight_candidate_to_be_discarded(
+    camera_module, monkeypatch
+):
+    start_blocked = threading.Event()
+    release_start = threading.Event()
+    candidate_closed = threading.Event()
+    capture_called = threading.Event()
+    release_capture = threading.Event()
+
+    class SlowStartingPicamera:
+        def create_video_configuration(self, **_kwargs):
+            return object()
+
+        def configure(self, _config):
+            pass
+
+        def start(self):
+            start_blocked.set()
+            assert release_start.wait(timeout=1.0)
+
+        def capture_array(self, *, wait):
+            capture_called.set()
+            assert release_capture.wait(timeout=1.0)
+            raise TimeoutError('test cleanup')
+
+        def cancel_all_and_flush(self):
+            release_capture.set()
+
+        def stop(self):
+            pass
+
+        def close(self):
+            candidate_closed.set()
+
+    monkeypatch.setattr(camera_module, '_Picamera2', SlowStartingPicamera)
+    cam = camera_module.Camera(prefer_picamera2=True)
+    viewer = cam.viewer()
+    viewer.__enter__()
+    assert start_blocked.wait(timeout=0.5)
+    viewer.__exit__(None, None, None)
+    assert cam.viewer_count == 0
+
+    release_start.set()
+    discarded_before_forced_stop = candidate_closed.wait(timeout=0.3)
+    capture_started_before_forced_stop = capture_called.is_set()
+    try:
+        assert discarded_before_forced_stop is True
+        assert capture_started_before_forced_stop is False
+        assert cam._backend == 'none'
+        assert cam._picam is None
+    finally:
+        cam.stop()
+
+
+def test_stale_candidate_failure_cannot_mutate_replacement_or_try_fallback(
+    camera_module, monkeypatch
+):
+    start_blocked = threading.Event()
+    release_start = threading.Event()
+    candidate_closed = threading.Event()
+    cv2_calls = []
+
+    class FailingPicamera:
+        def create_video_configuration(self, **_kwargs):
+            return object()
+
+        def configure(self, _config):
+            pass
+
+        def start(self):
+            start_blocked.set()
+            assert release_start.wait(timeout=1.0)
+            raise RuntimeError('stale candidate failed')
+
+        def close(self):
+            candidate_closed.set()
+
+    def create_cv2(*_args):
+        cv2_calls.append('constructed')
+        return StubVideoCapture()
+
+    monkeypatch.setattr(camera_module, '_Picamera2', FailingPicamera)
+    monkeypatch.setattr(camera_module.cv2, 'VideoCapture', create_cv2)
+    cam = camera_module.Camera(prefer_picamera2=True)
+    viewer = cam.viewer()
+    viewer.__enter__()
+    assert start_blocked.wait(timeout=0.5)
+    old_worker = cam._capture_thread
+    assert old_worker is not None
+    replacement = object()
+    replacement_owner = object()
+    with cam._lock:
+        cam._backend = 'picamera2'
+        cam._picam = replacement
+        cam._capture_thread = replacement_owner
+        with cam._frame_cond:
+            cam._latest_jpeg = b'replacement-frame'
+            cam._frame_seq = 17
+            cam._last_frame_t = 456.0
+            cam._last_error = 'replacement still starting'
+
+    release_start.set()
+    assert candidate_closed.wait(timeout=0.5)
+    old_worker.join(timeout=0.5)
+    viewer.__exit__(None, None, None)
+
+    assert old_worker.is_alive() is False
+    assert cv2_calls == []
+    assert cam._backend == 'picamera2'
+    assert cam._picam is replacement
+    assert cam._capture_thread is replacement_owner
+    with cam._frame_cond:
+        assert cam._latest_jpeg == b'replacement-frame'
+        assert cam._frame_seq == 17
+        assert cam._last_frame_t == 456.0
+        assert cam._last_error == 'replacement still starting'
+
+
+def test_unicam_preference_opens_picamera_first_without_initial_backoff(
+    camera_module, monkeypatch
+):
+    calls = []
+
+    class ImmediatePicamera:
+        def __init__(self):
+            calls.append('picamera-construct')
+
+        def create_video_configuration(self, **_kwargs):
+            return object()
+
+        def configure(self, _config):
+            calls.append('picamera-configure')
+
+        def start(self):
+            calls.append('picamera-start')
+
+        def capture_array(self, *, wait):
+            calls.append(('picamera-capture', wait))
+            return RGBFrame()
+
+        def cancel_all_and_flush(self):
+            calls.append('picamera-cancel')
+
+        def stop(self):
+            calls.append('picamera-stop')
+
+        def close(self):
+            calls.append('picamera-close')
+
+    def unexpected_cv2(*_args):
+        calls.append('cv2-construct')
+        return StubVideoCapture()
+
+    monkeypatch.setattr(camera_module, '_Picamera2', ImmediatePicamera)
+    monkeypatch.setattr(camera_module.cv2, 'VideoCapture', unexpected_cv2)
+    cam = camera_module.Camera(
+        prefer_picamera2=True,
+        recovery_backoff_s=1.0,
+    )
+    try:
+        frame = cam.snapshot(timeout=0.5)
+    finally:
+        cam.stop()
+
+    assert frame == b'jpeg'
+    assert calls[0] == 'picamera-construct'
+    assert 'cv2-construct' not in calls
+    assert cam.viewer_count == 0
+
+
+def test_unknown_device_retains_cv2_first_open_order(camera_module, monkeypatch):
+    calls = []
+
+    class WorkingUsbCapture:
+        def isOpened(self):
+            return True
+
+        def set(self, _prop, _value):
+            return True
+
+        def read(self):
+            calls.append('cv2-read')
+            return True, object()
+
+        def release(self):
+            calls.append('cv2-release')
+
+    def create_cv2(*_args):
+        calls.append('cv2-construct')
+        return WorkingUsbCapture()
+
+    def unexpected_picamera():
+        calls.append('picamera-construct')
+        return StubPicamera2()
+
+    monkeypatch.setattr(camera_module.cv2, 'VideoCapture', create_cv2)
+    monkeypatch.setattr(camera_module, '_Picamera2', unexpected_picamera)
+    cam = camera_module.Camera(
+        prefer_picamera2=False,
+        recovery_backoff_s=1.0,
+    )
+    try:
+        frame = cam.snapshot(timeout=0.5)
+    finally:
+        cam.stop()
+
+    assert frame == b'jpeg'
+    assert calls[0] == 'cv2-construct'
+    assert 'picamera-construct' not in calls
+    assert cam.viewer_count == 0
+
+
 def test_picamera_read_has_numeric_timeout(camera_module):
     fake = RecordingPicamera(array=RGBFrame())
     cam = camera_module.Camera(capture_timeout_s=2.0)
@@ -384,9 +707,14 @@ def test_viewer_preserves_detailed_cv2_open_error_without_fallback(
     cam = camera_module.Camera(recovery_backoff_s=1.0)
     try:
         with cam.viewer():
-            assert cam._last_error == (
-                'cv2 open failed: OSError: video device unavailable'
-            )
+            with cam._frame_cond:
+                assert cam._frame_cond.wait_for(
+                    lambda: cam._last_error is not None,
+                    timeout=0.5,
+                )
+                assert cam._last_error == (
+                    'cv2 open failed: OSError: video device unavailable'
+                )
             assert cam._capture_thread is not None
             assert cam._capture_thread.is_alive() is True
     finally:
@@ -544,13 +872,6 @@ def test_idle_exit_and_worker_clear_are_atomic_for_restart(
     worker.start()
     assert gap_lock.paused.wait(timeout=1.0)
 
-    replacement_backend = object()
-
-    def reopen():
-        cam._backend = 'picamera2'
-        cam._picam = replacement_backend
-        return True
-
     class ReplacementThread:
         instances = []
 
@@ -567,7 +888,6 @@ def test_idle_exit_and_worker_clear_are_atomic_for_restart(
         def is_alive(self):
             return self.started
 
-    cam._open = reopen
     monkeypatch.setattr(camera_module.threading, 'Thread', ReplacementThread)
     viewer = cam.viewer()
     viewer.__enter__()
@@ -583,8 +903,8 @@ def test_idle_exit_and_worker_clear_are_atomic_for_restart(
         assert replacement.started is True
         assert replacement.viewer_count_at_start == 1
         assert cam._capture_thread is replacement
-        assert cam._backend == 'picamera2'
-        assert cam._picam is replacement_backend
+        assert cam._backend == 'none'
+        assert cam._picam is None
     finally:
         viewer.__exit__(None, None, None)
 
