@@ -151,12 +151,12 @@ class Camera:
             return False
         self._cap = cap
         self._backend = "cv2"
-        self._set_error(None)
         return True
 
     def _open_picamera2(self) -> bool:
         if not _HAS_PICAMERA2:
             return False
+        picam = None
         try:
             picam = _Picamera2()
             frame_us = int(1_000_000 / max(1, self.fps))
@@ -168,9 +168,13 @@ class Camera:
             picam.start()
             self._picam = picam
             self._backend = "picamera2"
-            self._set_error(None)
             return True
         except Exception as exc:
+            if picam is not None:
+                try:
+                    picam.close()
+                except Exception:
+                    pass
             self._set_error(f"picamera2: {exc}")
             return False
 
@@ -195,6 +199,9 @@ class Camera:
         if self._picam is not None:
             try:
                 self._picam.stop()
+            except Exception:
+                pass
+            try:
                 self._picam.close()
             except Exception:
                 pass
@@ -216,6 +223,8 @@ class Camera:
     def _capture_loop(self) -> None:
         period = 1.0 / max(1, self.fps)
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
+        backend = "none"
+        backend_handle = None
         while not self._stop.is_set():
             with self._lock:
                 if self._viewers == 0:
@@ -224,10 +233,55 @@ class Camera:
                         self._capture_thread = None
                         return
                 backend = self._backend
+                if backend == "cv2":
+                    backend_handle = self._cap
+                elif backend == "picamera2":
+                    backend_handle = self._picam
+                else:
+                    backend_handle = None
             if backend == "none":
-                time.sleep(0.05)
+                with self._lock:
+                    has_viewer = self._viewers > 0
+                if not has_viewer:
+                    self._stop.wait(0.05)
+                    continue
+                if self._stop.wait(self.recovery_backoff_s):
+                    break
+                with self._lock:
+                    if (
+                        not self._stop.is_set()
+                        and self._viewers > 0
+                        and self._backend == "none"
+                    ):
+                        self._open()
                 continue
-            ok, frame = self._read_frame()
+            try:
+                ok, frame = self._read_frame()
+            except Exception as exc:
+                self._set_error(
+                    f"{backend} capture failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                with self._lock:
+                    failed_backend_is_current = (
+                        backend == "cv2"
+                        and backend_handle is not None
+                        and self._backend == backend
+                        and self._cap is backend_handle
+                    ) or (
+                        backend == "picamera2"
+                        and backend_handle is not None
+                        and self._backend == backend
+                        and self._picam is backend_handle
+                    )
+                    if failed_backend_is_current:
+                        if backend == "picamera2":
+                            try:
+                                backend_handle.cancel_all_and_flush()
+                            except Exception:
+                                pass
+                        self._close()
+                continue
             if not ok or frame is None:
                 self._set_error("read failed")
                 time.sleep(0.1)
@@ -244,7 +298,19 @@ class Camera:
                 self._frame_cond.notify_all()
             time.sleep(period)
         with self._lock:
-            self._close()
+            worker_backend_is_current = (
+                backend == "cv2"
+                and backend_handle is not None
+                and self._backend == backend
+                and self._cap is backend_handle
+            ) or (
+                backend == "picamera2"
+                and backend_handle is not None
+                and self._backend == backend
+                and self._picam is backend_handle
+            )
+            if self._backend == "none" or worker_backend_is_current:
+                self._close()
             self._capture_thread = None
             return
 
@@ -253,8 +319,7 @@ class Camera:
         """Open the camera + start the capture thread if not already running."""
         with self._lock:
             if not self.is_open:
-                if not self._open():
-                    return
+                self._open()
             if self._capture_thread is None or not self._capture_thread.is_alive():
                 self._stop.clear()
                 self._capture_thread = threading.Thread(
@@ -296,18 +361,33 @@ class Camera:
     def mjpeg_generator(self):
         """Generator producing multipart/x-mixed-replace MJPEG payload."""
         boundary = b"--frame"
-        # Drop the very first frame so a fresh client never sees a stale one
-        prev = id(None)
         with self.viewer():
+            with self._frame_cond:
+                previous_seq = self._frame_seq
+            stall_deadline = self._clock() + self.stream_stall_timeout_s
             while not self._stop.is_set():
                 with self._frame_cond:
-                    self._frame_cond.wait(timeout=2.0)
+                    remaining = stall_deadline - self._clock()
+                    if remaining <= 0:
+                        return
+                    advanced = self._frame_cond.wait_for(
+                        lambda: (
+                            self._stop.is_set()
+                            or self._frame_seq > previous_seq
+                        ),
+                        timeout=remaining,
+                    )
+                    if self._stop.is_set():
+                        return
+                    if not advanced:
+                        if self._clock() >= stall_deadline:
+                            return
+                        continue
                     frame = self._latest_jpeg
+                    previous_seq = self._frame_seq
                 if not frame:
                     continue
-                if id(frame) == prev:
-                    continue
-                prev = id(frame)
+                stall_deadline = self._clock() + self.stream_stall_timeout_s
                 yield (
                     boundary
                     + b"\r\nContent-Type: image/jpeg\r\n"

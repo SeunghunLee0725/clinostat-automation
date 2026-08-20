@@ -132,6 +132,16 @@ class WaitRecordingCondition(threading.Condition):
         return super().wait_for(predicate, timeout)
 
 
+class StreamWaitCondition(threading.Condition):
+    def __init__(self):
+        super().__init__()
+        self.wait_started = threading.Event()
+
+    def wait(self, timeout=None):
+        self.wait_started.set()
+        return super().wait(timeout)
+
+
 class AttemptRecordingCondition(threading.Condition):
     def __init__(self):
         super().__init__()
@@ -547,6 +557,362 @@ def test_publishing_encoded_frames_updates_health_state_and_notifies(
     assert status['last_frame_age_s'] == 0.0
     assert cam._last_frame_t == 102.0
     assert cam._frame_cond.notify_count == 2
+
+
+def test_picamera_timeout_recovers_and_clears_error_only_after_publication(
+    camera_module, monkeypatch
+):
+    reopened = threading.Event()
+    release_replacement_frame = threading.Event()
+    failed_calls = []
+    replacement_calls = []
+
+    class FailedPicamera:
+        def create_video_configuration(self, **_kwargs):
+            return object()
+
+        def configure(self, _config):
+            failed_calls.append('configure')
+
+        def start(self):
+            failed_calls.append('start')
+
+        def capture_array(self, *, wait):
+            assert wait == 0.02
+            raise TimeoutError('capture deadline expired')
+
+        def cancel_all_and_flush(self):
+            failed_calls.append('cancel_all_and_flush')
+
+        def stop(self):
+            failed_calls.append('stop')
+
+        def close(self):
+            failed_calls.append('close')
+
+    class ReplacementPicamera:
+        def create_video_configuration(self, **_kwargs):
+            return object()
+
+        def configure(self, _config):
+            replacement_calls.append('configure')
+
+        def start(self):
+            replacement_calls.append('start')
+            reopened.set()
+
+        def capture_array(self, *, wait):
+            assert wait == 0.02
+            assert release_replacement_frame.wait(timeout=1.0)
+            return RGBFrame()
+
+        def stop(self):
+            replacement_calls.append('stop')
+
+        def close(self):
+            replacement_calls.append('close')
+
+    backends = iter((FailedPicamera(), ReplacementPicamera()))
+    monkeypatch.setattr(camera_module, '_Picamera2', lambda: next(backends))
+    monkeypatch.setattr(StubVideoCapture, 'opened', False)
+    cam = camera_module.Camera(
+        capture_timeout_s=0.02,
+        recovery_backoff_s=0.01,
+    )
+    wait_timeouts = []
+    original_wait = cam._stop.wait
+
+    def recording_wait(timeout=None):
+        wait_timeouts.append(timeout)
+        return original_wait(timeout)
+
+    monkeypatch.setattr(cam._stop, 'wait', recording_wait)
+
+    with cam.viewer():
+        assert reopened.wait(timeout=1.0)
+        expected_error = (
+            'picamera2 capture failed: TimeoutError: '
+            'capture deadline expired'
+        )
+        assert cam.status()['error'] == expected_error
+        assert failed_calls == [
+            'configure',
+            'start',
+            'cancel_all_and_flush',
+            'stop',
+            'close',
+        ]
+        assert cam._frame_seq == 0
+        assert cam.recovery_backoff_s in wait_timeouts
+
+        release_replacement_frame.set()
+        with cam._frame_cond:
+            assert cam._frame_cond.wait_for(
+                lambda: cam._frame_seq > 0,
+                timeout=1.0,
+            )
+            assert cam._last_error is None
+
+    cam.stop()
+
+
+def test_stale_failed_read_does_not_close_replacement_backend(camera_module):
+    read_started = threading.Event()
+    release_failed_read = threading.Event()
+    old_calls = []
+    replacement_calls = []
+
+    class OldPicamera:
+        def capture_array(self, *, wait):
+            assert wait == 2.0
+            read_started.set()
+            assert release_failed_read.wait(timeout=1.0)
+            raise TimeoutError('old read timed out')
+
+        def cancel_all_and_flush(self):
+            old_calls.append('cancel_all_and_flush')
+
+        def stop(self):
+            old_calls.append('stop')
+
+        def close(self):
+            old_calls.append('close')
+
+    class ReplacementPicamera:
+        def cancel_all_and_flush(self):
+            replacement_calls.append('cancel_all_and_flush')
+
+        def stop(self):
+            replacement_calls.append('stop')
+
+        def close(self):
+            replacement_calls.append('close')
+
+    old = OldPicamera()
+    replacement = ReplacementPicamera()
+    cam = camera_module.Camera()
+    cam._backend = 'picamera2'
+    cam._picam = old
+    cam._viewers = 1
+    worker = threading.Thread(target=cam._capture_loop, daemon=True)
+    cam._capture_thread = worker
+    worker.start()
+    assert read_started.wait(timeout=0.5)
+
+    with cam._lock:
+        cam._close()
+        cam._backend = 'picamera2'
+        cam._picam = replacement
+    cam._stop.set()
+    release_failed_read.set()
+    worker.join(timeout=1.0)
+
+    assert worker.is_alive() is False
+    assert old_calls == ['stop', 'close']
+    assert replacement_calls == []
+    assert cam._backend == 'picamera2'
+    assert cam._picam is replacement
+    assert cam._last_error == (
+        'picamera2 capture failed: TimeoutError: old read timed out'
+    )
+
+
+def test_initial_open_failure_keeps_viewer_owned_worker_retrying(
+    camera_module, monkeypatch
+):
+    cam = camera_module.Camera(recovery_backoff_s=0.01)
+    retried = threading.Event()
+    attempts = []
+    retry_workers = []
+    wait_timeouts = []
+    original_wait = cam._stop.wait
+
+    def recording_wait(timeout=None):
+        wait_timeouts.append(timeout)
+        return original_wait(timeout)
+
+    monkeypatch.setattr(cam._stop, 'wait', recording_wait)
+
+    def open_camera():
+        attempts.append(cam._viewers)
+        if len(attempts) == 1:
+            return False
+        cam._backend = 'picamera2'
+        cam._picam = object()
+        retry_workers.append(cam._capture_thread)
+        retried.set()
+        cam._stop.set()
+        return True
+
+    cam._open = open_camera
+    cam._close = lambda: None
+
+    with cam.viewer():
+        assert retried.wait(timeout=1.0)
+        worker = retry_workers[0]
+        assert worker is not None
+        worker.join(timeout=1.0)
+        assert worker.is_alive() is False
+
+    assert attempts == [1, 1]
+    assert cam.recovery_backoff_s in wait_timeouts
+    assert cam.viewer_count == 0
+
+
+@pytest.mark.parametrize(
+    'failure_stage',
+    ('create_video_configuration', 'configure', 'start'),
+)
+def test_partial_picamera_startup_failure_closes_temporary_camera_and_reports_error(
+    camera_module, monkeypatch, failure_stage
+):
+    calls = []
+
+    class PartiallyStartedPicamera:
+        def create_video_configuration(self, **_kwargs):
+            calls.append('create_video_configuration')
+            if failure_stage == 'create_video_configuration':
+                raise RuntimeError('create_video_configuration failed')
+            return object()
+
+        def configure(self, _config):
+            calls.append('configure')
+            if failure_stage == 'configure':
+                raise RuntimeError('configure failed')
+
+        def start(self):
+            calls.append('start')
+            if failure_stage == 'start':
+                raise RuntimeError('start failed')
+
+        def close(self):
+            calls.append('close')
+
+    temporary = PartiallyStartedPicamera()
+    monkeypatch.setattr(camera_module, '_Picamera2', lambda: temporary)
+    cam = camera_module.Camera()
+
+    assert cam._open_picamera2() is False
+    assert calls[-1] == 'close'
+    assert cam._picam is None
+    assert cam._backend == 'none'
+    assert cam.status()['error'] == f'picamera2: {failure_stage} failed'
+
+
+@pytest.mark.parametrize('backend', ('cv2', 'picamera2'))
+def test_successful_reopen_preserves_recovery_error_until_frame_publication(
+    camera_module, monkeypatch, backend
+):
+    class OpenPicamera:
+        def create_video_configuration(self, **_kwargs):
+            return object()
+
+        def configure(self, _config):
+            pass
+
+        def start(self):
+            pass
+
+    cam = camera_module.Camera()
+    cam._last_error = 'picamera2 capture failed: TimeoutError: stalled'
+    if backend == 'cv2':
+        monkeypatch.setattr(StubVideoCapture, 'opened', True)
+        monkeypatch.setattr(StubVideoCapture, 'read_result', (True, object()))
+        opened = cam._open_cv2()
+    else:
+        monkeypatch.setattr(camera_module, '_Picamera2', OpenPicamera)
+        opened = cam._open_picamera2()
+
+    assert opened is True
+    assert cam.status()['error'] == (
+        'picamera2 capture failed: TimeoutError: stalled'
+    )
+
+    with cam._frame_cond:
+        cam._latest_jpeg = b'published'
+        cam._frame_seq += 1
+        cam._last_frame_t = cam._clock()
+        cam._last_error = None
+        cam._frame_cond.notify_all()
+
+    assert cam.status()['error'] is None
+
+
+def test_mjpeg_generator_uses_frame_sequence_for_identical_bytes(
+    camera_module
+):
+    cam = camera_module.Camera(stream_stall_timeout_s=0.5)
+    cam._ensure_running = lambda: None
+    cam._frame_cond = StreamWaitCondition()
+    shared_jpeg = b'same-jpeg-object'
+    cam._latest_jpeg = shared_jpeg
+    cam._frame_seq = 7
+    generator = cam.mjpeg_generator()
+    chunks = []
+    errors = []
+
+    def consume_one():
+        try:
+            chunks.append(next(generator))
+        except BaseException as exc:
+            errors.append(exc)
+
+    for sequence in (8, 9):
+        cam._frame_cond.wait_started.clear()
+        consumer = threading.Thread(target=consume_one, daemon=True)
+        consumer.start()
+        assert cam._frame_cond.wait_started.wait(timeout=0.5)
+        with cam._frame_cond:
+            cam._latest_jpeg = shared_jpeg
+            cam._frame_seq = sequence
+            cam._frame_cond.notify_all()
+        consumer.join(timeout=0.2)
+        if consumer.is_alive():
+            cam._stop.set()
+            with cam._frame_cond:
+                cam._frame_cond.notify_all()
+            consumer.join(timeout=0.5)
+        assert consumer.is_alive() is False
+
+    generator.close()
+    expected = (
+        b'--frame\r\nContent-Type: image/jpeg\r\n'
+        b'Content-Length: 16\r\n\r\nsame-jpeg-object\r\n'
+    )
+    assert errors == []
+    assert chunks == [expected, expected]
+    assert cam.viewer_count == 0
+
+
+def test_mjpeg_generator_stall_releases_viewer_and_consumer_thread(
+    camera_module
+):
+    cam = camera_module.Camera(stream_stall_timeout_s=0.03)
+    cam._ensure_running = lambda: None
+    generator = cam.mjpeg_generator()
+    stopped = []
+
+    def consume():
+        try:
+            next(generator)
+        except StopIteration:
+            stopped.append(True)
+
+    consumer = threading.Thread(target=consume, daemon=True)
+    consumer.start()
+    consumer.join(timeout=0.5)
+    exited_before_forced_cleanup = not consumer.is_alive()
+    if consumer.is_alive():
+        cam._stop.set()
+        with cam._frame_cond:
+            cam._frame_cond.notify_all()
+        consumer.join(timeout=0.5)
+
+    assert exited_before_forced_cleanup is True
+    assert consumer.is_alive() is False
+    assert stopped == [True]
+    assert cam.viewer_count == 0
+    assert cam._capture_thread is None
 
 
 def test_snapshot_does_not_return_cached_frame(camera_module):
