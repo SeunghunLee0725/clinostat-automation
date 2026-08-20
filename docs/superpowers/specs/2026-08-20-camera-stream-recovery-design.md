@@ -56,6 +56,9 @@ Two alternatives were rejected:
   copy of the deployed `/home/aiworker-1/clinostat/camera.py`.
 - Add `integration/clinostat_extension/tests/test_camera.py` for camera lifecycle,
   timeout, status, and stream cleanup regressions.
+- Keep `integration/clinostat_extension/work/server.py` as the canonical server
+  source and explicitly close its synchronous MJPEG iterator when the Starlette
+  response lifecycle ends.
 - Update `integration/deploy/deploy_to_pi.sh` so future deployments include
   `camera.py` with the other clinostat extension files.
 
@@ -123,37 +126,59 @@ produced for 10 seconds, the generator exits, its `viewer()` context decrements
 the count, and the server can release a dead TCP client. This also guarantees
 that a permanently unavailable camera cannot accumulate viewer threads forever.
 
+Starlette iterates the synchronous generator in its thread pool. The camera
+stream route therefore uses a closeable streaming response that closes the
+exact iterator, off the event loop, when the ASGI response completes, its send
+fails, or the client disconnects. If a synchronous `next()` is already running,
+cleanup waits for that bounded call to return before closing, avoiding a
+concurrent `generator.close()` race.
+
 ## Deployment and rollback
 
 Before deployment:
 
 - re-check that clinostat control and experiments are stopped;
-- run the focused camera tests and the full integration suite;
-- save a timestamped copy of the remote `camera.py`.
+- run the focused camera/server tests and the full integration suite;
+- save and hash timestamped copies of the remote `camera.py` and `server.py`.
 
 The incident deployment does **not** invoke `deploy/deploy_to_pi.sh`, because
 that general-purpose script also deploys gateway files and restarts
-`spacebio-gateway.service`. Instead, use a scoped backup, `scp` only
-`camera.py`, then restart only `clinostat.service`. The service is configured
-with `Restart=always`; because direct `systemctl restart` is unavailable to the
-SSH user, terminate the user-owned main process and let systemd recreate it.
-Do not restart `spacebio-gateway.service`.
+`spacebio-gateway.service`. Instead, treat `camera.py` and `server.py` as one
+incident unit: stage, compile, hash, and install both before loading either,
+then restart only `clinostat.service`. Every SSH operation has finite connect
+and keepalive limits. The service is configured with `Restart=always`; because
+direct `systemctl restart` is unavailable to the SSH user, validate its exact
+MainPID, unit user, process UID, and argv before signaling that PID and letting
+systemd recreate it. Do not upload, signal, or restart any SpaceBio gateway
+file or process.
 
-Adding `camera.py` to `EXTENSION_PAIRS` only makes the canonical camera source
-part of later full-system deployments; the modified general-purpose script is
-tested but is not executed during this incident.
+Adding `camera.py` beside the existing `server.py` entry in `EXTENSION_PAIRS`
+only makes both canonical sources part of later full-system deployments; the
+modified general-purpose script is tested but is not executed during this
+incident.
+
+Before the first live handoff, arm a local failure handler while all recorded
+hashes, paths, and PIDs are still in scope. Any failed live criterion
+automatically disables recursive traps, restores both validated backups with
+live-hash guards, performs an exact-target clinostat-only handoff, verifies
+both old hashes, stopped state, root response, and unchanged gateway PID, then
+exits nonzero. Old/old resumes handoff without rewriting; a pair composed only
+of the recorded old/new hashes restores both backups; any unknown hash aborts
+without overwrite. The manual rollback commands use the same classification
+as an auditable fallback, not the primary failure path.
 
 After restart, verify:
 
 - the service has a new PID and is active;
 - control and experiment state remain stopped;
 - camera status becomes healthy with an advancing sequence;
-- multiple snapshots have different hashes;
+- multiple snapshots advance frame sequence and have different content hashes;
 - an MJPEG request receives multiple boundaries within a few seconds;
 - a disconnected diagnostic stream does not leave the viewer count elevated.
 
-Rollback copies the timestamped remote backup over `camera.py`, restarts only
-`clinostat.service`, and repeats the health checks.
+Rollback restores the timestamped `camera.py` and `server.py` backups as a
+validated pair, restarts only `clinostat.service`, and verifies the restored
+hashes and stopped state. It never changes or restarts the gateway.
 
 ## Tests
 
@@ -170,12 +195,17 @@ Required regressions:
 5. Snapshot refuses a cached frame and waits for a newer sequence.
 6. MJPEG delivery is keyed by sequence, not object identity.
 7. A stalled MJPEG generator exits and decrements its viewer count.
-8. Existing tests remain green, and the deployment manifest includes
-   `camera.py`.
+8. Existing tests remain green, and the deployment manifest adds `camera.py`
+   alongside its existing `server.py` entry.
+9. Real Starlette response-lifecycle tests close the exact synchronous stream
+   iterator once, off the event loop, after disconnect, send failure, or normal
+   completion, including an in-flight bounded `next()`.
 
 ## Success criteria
 
 The production endpoint delivers more than one distinct JPEG frame, frame
 sequence advances continuously during viewing, status reports healthy, and the
-viewer count returns to its pre-request value after a diagnostic client
-disconnects. The complete integration test suite passes before deployment.
+ASGI response lifecycle closes a disconnected diagnostic stream so the viewer
+count returns to its pre-request value. The deployed `camera.py` and `server.py`
+hashes match the reviewed incident pair, while the SpaceBio gateway PID is
+unchanged. The complete integration test suite passes before deployment.

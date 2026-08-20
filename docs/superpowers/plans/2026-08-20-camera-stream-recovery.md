@@ -298,7 +298,13 @@ INCIDENT_TARGET="${INCIDENT_PI_USER}@${INCIDENT_PI_HOST}"
 INCIDENT_REMOTE_ROOT='/home/aiworker-1/clinostat'
 INCIDENT_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 INCIDENT_LOG_SINCE="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-INCIDENT_SSH=(-o BatchMode=yes -o StrictHostKeyChecking=yes)
+INCIDENT_SSH=(
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=yes
+  -o ConnectTimeout=5
+  -o ServerAliveInterval=2
+  -o ServerAliveCountMax=2
+)
 test "$INCIDENT_TARGET" = 'aiworker-1@100.77.1.42'
 
 ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
@@ -321,9 +327,10 @@ INCIDENT_OLD_SERVER_SHA="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
   "sha256sum '$INCIDENT_REMOTE_ROOT/server.py' | awk '{print \$1}'")"
 test "${#INCIDENT_OLD_CAMERA_SHA}" -eq 64
 test "${#INCIDENT_OLD_SERVER_SHA}" -eq 64
-printf 'clinostat PID=%s gateway PID=%s camera old=%s server old=%s\n' \
-  "$INCIDENT_CLINOSTAT_PID_BEFORE" "$INCIDENT_GATEWAY_PID_BEFORE" \
-  "$INCIDENT_OLD_CAMERA_SHA" "$INCIDENT_OLD_SERVER_SHA"
+printf 'incident=%s clinostat PID=%s gateway PID=%s camera old=%s server old=%s\n' \
+  "$INCIDENT_STAMP" "$INCIDENT_CLINOSTAT_PID_BEFORE" \
+  "$INCIDENT_GATEWAY_PID_BEFORE" "$INCIDENT_OLD_CAMERA_SHA" \
+  "$INCIDENT_OLD_SERVER_SHA"
 ```
 
 Do not continue if either status is running, either PID is zero, or either hash
@@ -352,6 +359,8 @@ INCIDENT_BACKUP_SERVER_SHA="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
   "sha256sum '$INCIDENT_SERVER_BACKUP' | awk '{print \$1}'")"
 test "$INCIDENT_BACKUP_CAMERA_SHA" = "$INCIDENT_OLD_CAMERA_SHA"
 test "$INCIDENT_BACKUP_SERVER_SHA" = "$INCIDENT_OLD_SERVER_SHA"
+printf 'camera backup=%s server backup=%s\n' \
+  "$INCIDENT_CAMERA_BACKUP" "$INCIDENT_SERVER_BACKUP"
 ```
 
 - [ ] **Step 4: Stage, compile, hash, and commit both files together**
@@ -364,6 +373,8 @@ INCIDENT_LOCAL_CAMERA="$PWD/clinostat_extension/work/camera.py"
 INCIDENT_LOCAL_SERVER="$PWD/clinostat_extension/work/server.py"
 INCIDENT_NEW_CAMERA_SHA="$(shasum -a 256 "$INCIDENT_LOCAL_CAMERA" | awk '{print $1}')"
 INCIDENT_NEW_SERVER_SHA="$(shasum -a 256 "$INCIDENT_LOCAL_SERVER" | awk '{print $1}')"
+printf 'camera new=%s server new=%s\n' \
+  "$INCIDENT_NEW_CAMERA_SHA" "$INCIDENT_NEW_SERVER_SHA"
 INCIDENT_REMOTE_STAGE="$INCIDENT_REMOTE_ROOT/.camera-stream-recovery-$INCIDENT_STAMP"
 case "$INCIDENT_REMOTE_STAGE" in
   "$INCIDENT_REMOTE_ROOT"/.camera-stream-recovery-*) ;;
@@ -385,11 +396,246 @@ ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
    test \"\$(sha256sum '$INCIDENT_REMOTE_STAGE/server.py' | awk '{print \$1}')\" = '$INCIDENT_NEW_SERVER_SHA'"
 ```
 
-Commit the two files with two atomic renames inside one remote shell. A POSIX
-filesystem cannot atomically rename two paths as a single primitive, so the
-shell installs both before any restart and restores both validated backups on
-any error or signal. The running process continues using its already-imported
-modules until the pair is complete and verified.
+Before committing either live file, define and arm the local fail-safe below.
+The function uses the still-live `INCIDENT_*` values and is deliberately
+self-contained: it restores a reviewed new/new pair or a known old/new partial
+pair, skips file mutation for an already restored old/old pair, and refuses any
+unknown third-party hash. It then performs an exact-target clinostat-only
+handoff and verifies rollback. Its traps disable themselves before rollback to
+prevent recursion.
+
+```bash
+incident_rollback_pair() (
+  set -euo pipefail
+  printf 'automatic rollback: restoring camera.py and server.py\n' >&2
+
+  test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    "sha256sum '$INCIDENT_CAMERA_BACKUP' | awk '{print \$1}'")" = \
+    "$INCIDENT_OLD_CAMERA_SHA"
+  test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    "sha256sum '$INCIDENT_SERVER_BACKUP' | awk '{print \$1}'")" = \
+    "$INCIDENT_OLD_SERVER_SHA"
+
+  live_camera_sha=''
+  live_server_sha=''
+  for _attempt in $(seq 1 20); do
+    live_camera_sha=''
+    live_server_sha=''
+    if live_camera_sha="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+         "sha256sum '$INCIDENT_REMOTE_ROOT/camera.py' | awk '{print \$1}'")" \
+       && live_server_sha="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+         "sha256sum '$INCIDENT_REMOTE_ROOT/server.py' | awk '{print \$1}'")"; then
+      if {
+           [ "$live_camera_sha" = "$INCIDENT_NEW_CAMERA_SHA" ] \
+             && [ "$live_server_sha" = "$INCIDENT_NEW_SERVER_SHA" ]
+         } || {
+           [ "$live_camera_sha" = "$INCIDENT_OLD_CAMERA_SHA" ] \
+             && [ "$live_server_sha" = "$INCIDENT_OLD_SERVER_SHA" ]
+         }; then
+        break
+      fi
+    fi
+    sleep 0.1
+  done
+
+  if [ "$live_camera_sha" = "$INCIDENT_OLD_CAMERA_SHA" ] \
+     && [ "$live_server_sha" = "$INCIDENT_OLD_SERVER_SHA" ]; then
+    printf 'automatic rollback: old file pair already present; resuming handoff\n' >&2
+  elif {
+         [ "$live_camera_sha" = "$INCIDENT_OLD_CAMERA_SHA" ] \
+           || [ "$live_camera_sha" = "$INCIDENT_NEW_CAMERA_SHA" ]
+       } && {
+         [ "$live_server_sha" = "$INCIDENT_OLD_SERVER_SHA" ] \
+           || [ "$live_server_sha" = "$INCIDENT_NEW_SERVER_SHA" ]
+       }; then
+    ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
+      "$INCIDENT_REMOTE_ROOT" "$INCIDENT_CAMERA_BACKUP" \
+      "$INCIDENT_SERVER_BACKUP" "$INCIDENT_OLD_CAMERA_SHA" \
+      "$INCIDENT_OLD_SERVER_SHA" "$INCIDENT_NEW_CAMERA_SHA" \
+      "$INCIDENT_NEW_SERVER_SHA" "$INCIDENT_STAMP" \
+      <<'REMOTE_AUTOMATIC_ROLLBACK'
+set -euo pipefail
+root=$1
+camera_backup=$2
+server_backup=$3
+camera_old_sha=$4
+server_old_sha=$5
+camera_new_sha=$6
+server_new_sha=$7
+stamp=$8
+committed=0
+
+restore_pre_pair() {
+  mv -f -- "$root/.camera.py.auto-pre-rollback-$stamp" "$root/camera.py"
+  mv -f -- "$root/.server.py.auto-pre-rollback-$stamp" "$root/server.py"
+}
+finish_rollback() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [ "$committed" -ne 1 ]; then
+    restore_pre_pair
+  fi
+  exit "$status"
+}
+
+test "$(sha256sum "$camera_backup" | awk '{print $1}')" = "$camera_old_sha"
+test "$(sha256sum "$server_backup" | awk '{print $1}')" = "$server_old_sha"
+camera_live_sha="$(sha256sum "$root/camera.py" | awk '{print $1}')"
+server_live_sha="$(sha256sum "$root/server.py" | awk '{print $1}')"
+case "$camera_live_sha" in
+  "$camera_old_sha"|"$camera_new_sha") ;;
+  *) exit 1 ;;
+esac
+case "$server_live_sha" in
+  "$server_old_sha"|"$server_new_sha") ;;
+  *) exit 1 ;;
+esac
+test ! -e "$root/.camera.py.auto-pre-rollback-$stamp"
+test ! -e "$root/.server.py.auto-pre-rollback-$stamp"
+cp -a "$root/camera.py" "$root/.camera.py.auto-pre-rollback-$stamp"
+cp -a "$root/server.py" "$root/.server.py.auto-pre-rollback-$stamp"
+cp -a "$camera_backup" "$root/.camera.py.auto-rollback-$stamp"
+cp -a "$server_backup" "$root/.server.py.auto-rollback-$stamp"
+trap finish_rollback EXIT
+trap 'exit 1' HUP INT TERM
+mv -f -- "$root/.camera.py.auto-rollback-$stamp" "$root/camera.py"
+mv -f -- "$root/.server.py.auto-rollback-$stamp" "$root/server.py"
+test "$(sha256sum "$root/camera.py" | awk '{print $1}')" = "$camera_old_sha"
+test "$(sha256sum "$root/server.py" | awk '{print $1}')" = "$server_old_sha"
+committed=1
+trap - EXIT HUP INT TERM
+rm -f -- \
+  "$root/.camera.py.auto-pre-rollback-$stamp" \
+  "$root/.server.py.auto-pre-rollback-$stamp"
+REMOTE_AUTOMATIC_ROLLBACK
+  else
+    printf 'automatic rollback refused: live file pair contains an unknown hash\n' >&2
+    exit 1
+  fi
+
+  test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    'systemctl show clinostat.service -p Restart --value')" = 'always'
+  INCIDENT_ROLLBACK_PID_BEFORE=''
+  for _attempt in $(seq 1 60); do
+    INCIDENT_ROLLBACK_PID_BEFORE="$(
+      ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+        'systemctl show clinostat.service -p MainPID --value'
+    )"
+    if [ "$INCIDENT_ROLLBACK_PID_BEFORE" -gt 0 ] \
+       && ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+         'systemctl is-active --quiet clinostat.service'; then
+      break
+    fi
+    sleep 0.25
+  done
+  test "$INCIDENT_ROLLBACK_PID_BEFORE" -gt 0
+
+  ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
+    "$INCIDENT_ROLLBACK_PID_BEFORE" "$INCIDENT_GATEWAY_PID_BEFORE" \
+    <<'REMOTE_AUTOMATIC_HANDOFF'
+set -euo pipefail
+expected_pid=$1
+expected_gateway_pid=$2
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/control/status \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("running") is False, d'
+curl -fsS --max-time 5 http://127.0.0.1:8000/api/experiment/status \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("running") is False, d'
+systemctl is-active --quiet clinostat.service
+test "$(systemctl show clinostat.service -p Restart --value)" = 'always'
+test "$(systemctl show spacebio-gateway.service -p MainPID --value)" = \
+  "$expected_gateway_pid"
+test "$(systemctl show clinostat.service -p User --value)" = 'aiworker-1'
+current_pid="$(systemctl show clinostat.service -p MainPID --value)"
+test "$current_pid" = "$expected_pid"
+test "$current_pid" -gt 0
+process_uid="$(awk '/^Uid:/{print $2; exit}' "/proc/$current_pid/status")"
+test "$process_uid" = "$(id -u aiworker-1)"
+python3 - "$current_pid" <<'PROCESS_CHECK'
+import pathlib
+import sys
+
+pid = sys.argv[1]
+argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().rstrip(b"\0").split(b"\0")
+assert argv == [b"/usr/bin/python3", b"/home/aiworker-1/clinostat/server.py"], argv
+PROCESS_CHECK
+kill -KILL -- "$current_pid"
+REMOTE_AUTOMATIC_HANDOFF
+
+  INCIDENT_ROLLBACK_PID_AFTER=''
+  for _attempt in $(seq 1 60); do
+    INCIDENT_ROLLBACK_PID_AFTER="$(
+      ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+        'systemctl show clinostat.service -p MainPID --value'
+    )"
+    if [ "$INCIDENT_ROLLBACK_PID_AFTER" -gt 0 ] \
+       && [ "$INCIDENT_ROLLBACK_PID_AFTER" != "$INCIDENT_ROLLBACK_PID_BEFORE" ] \
+       && ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+         'systemctl is-active --quiet clinostat.service'; then
+      break
+    fi
+    sleep 0.25
+  done
+  test "$INCIDENT_ROLLBACK_PID_AFTER" -gt 0
+  test "$INCIDENT_ROLLBACK_PID_AFTER" != "$INCIDENT_ROLLBACK_PID_BEFORE"
+  test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    "sha256sum '$INCIDENT_REMOTE_ROOT/camera.py' | awk '{print \$1}'")" = \
+    "$INCIDENT_OLD_CAMERA_SHA"
+  test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    "sha256sum '$INCIDENT_REMOTE_ROOT/server.py' | awk '{print \$1}'")" = \
+    "$INCIDENT_OLD_SERVER_SHA"
+  test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    'systemctl show spacebio-gateway.service -p MainPID --value')" = \
+    "$INCIDENT_GATEWAY_PID_BEFORE"
+  ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    'curl -fsS --max-time 5 http://127.0.0.1:8000/ -o /dev/null'
+  ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    "curl -fsS --max-time 5 http://127.0.0.1:8000/api/control/status \
+     | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get(\"running\") is False, d'"
+  ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+    "curl -fsS --max-time 5 http://127.0.0.1:8000/api/experiment/status \
+     | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get(\"running\") is False, d'"
+  printf 'automatic rollback complete: old hashes restored, clinostat PID %s -> %s\n' \
+    "$INCIDENT_ROLLBACK_PID_BEFORE" "$INCIDENT_ROLLBACK_PID_AFTER" >&2
+)
+
+INCIDENT_ROLLBACK_REQUIRED=1
+incident_rollback_guard() {
+  local failure_status=${1:-1}
+  local rollback_status
+  trap - ERR EXIT
+  trap '' HUP INT TERM
+  set +e
+  incident_rollback_pair
+  rollback_status=$?
+  if [ "$rollback_status" -ne 0 ]; then
+    printf 'AUTOMATIC ROLLBACK FAILED (status %s); stop and escalate\n' \
+      "$rollback_status" >&2
+  fi
+  exit "$failure_status"
+}
+incident_exit_guard() {
+  local exit_status=$?
+  trap - EXIT
+  if [ "${INCIDENT_ROLLBACK_REQUIRED:-0}" -eq 1 ]; then
+    if [ "$exit_status" -eq 0 ]; then
+      exit_status=1
+    fi
+    incident_rollback_guard "$exit_status"
+  fi
+  exit "$exit_status"
+}
+trap 'incident_rollback_guard $?' ERR
+trap incident_exit_guard EXIT
+trap 'incident_rollback_guard 129' HUP
+trap 'incident_rollback_guard 130' INT
+trap 'incident_rollback_guard 143' TERM
+```
+
+The guard is now active. Commit the two files with two atomic renames inside one
+remote shell. A POSIX filesystem cannot atomically rename two paths as a single
+primitive, so the remote shell installs both before any restart and restores
+both validated backups on any error or signal. The running process continues
+using its already-imported modules until the pair is complete and verified.
 
 ```bash
 ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
@@ -442,8 +688,16 @@ python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' "$stage" || true
 REMOTE_INSTALL
 ```
 
-Do not restart if this transaction fails. Confirm both final hashes once more
-before proceeding:
+If the remote transaction fails, its own trap restores the old pair and the
+already-armed local handler briefly waits for a stable old/old or new/new
+state. If a known old/new partial pair remains, it safely restores both
+validated backups; any unknown hash causes drift escalation without overwrite.
+From guard activation through the end of live validation, any unhandled
+nonzero criterion, signal, or premature shell exit invokes
+`incident_rollback_pair` before the incident shell exits nonzero. Do not run
+the install or live checks in a different shell.
+
+Confirm both final hashes once more while the automatic rollback is armed:
 
 ```bash
 test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
@@ -595,6 +849,9 @@ for name in sys.argv[1:]:
     assert data.startswith(b"\xff\xd8") and data.endswith(b"\xff\xd9"), name' \
   "$verify_dir/snapshot-1.jpg" \
   "$verify_dir/snapshot-2.jpg"
+snapshot_one_sha="$(sha256sum "$verify_dir/snapshot-1.jpg" | awk '{print $1}')"
+snapshot_two_sha="$(sha256sum "$verify_dir/snapshot-2.jpg" | awk '{print $1}')"
+test "$snapshot_one_sha" != "$snapshot_two_sha"
 REMOTE_SNAPSHOT_CHECK
 
 ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
@@ -685,16 +942,26 @@ ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
 path=pathlib.Path(sys.argv[1])
 assert str(path).startswith(\"/tmp/clinostat-camera-verify-\")
 shutil.rmtree(path)' '$INCIDENT_VERIFY_DIR'"
+INCIDENT_ROLLBACK_REQUIRED=0
+trap - ERR EXIT HUP INT TERM
 ```
 
 On failure, retain the exact verification directory for the rollback report.
-Do not use a broad /tmp wildcard.
+Do not use a broad /tmp wildcard. Reaching the trap-disarm lines is the only
+successful end state. Any earlier failure invokes the automatic paired
+rollback and exits nonzero.
 
-- [ ] **Step 7: Roll back both files on any failed production criterion**
+- [ ] **Step 7 (failure only): Retain the manual paired rollback as an audited fallback**
 
-If any live criterion fails, do not stack another fix. Validate both backup
-hashes again, copy both into temporary rollback paths, atomically replace both
-live paths in one remote shell, verify both old hashes, and only then repeat the
+The armed handler above is the primary failure path and runs before the
+incident shell can lose its unexported state. Keep the commands below as a
+line-by-line audited fallback for an operator who has reconstructed the exact
+printed `INCIDENT_*` values after diagnosing a failed automatic rollback. Do
+not execute this step after Step 6 disarms the trap successfully, and do not
+stack another fix. Validate both backup hashes and classify the live pair
+first: old/old skips file mutation and resumes handoff; any pair composed only
+of the recorded old/new hashes restores both backups; any unknown hash stops
+for drift escalation. Verify both old hashes before repeating the
 clinostat-only PID handoff. Never restart or signal the gateway.
 
 ```bash
@@ -703,11 +970,26 @@ test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
 test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
   "sha256sum '$INCIDENT_SERVER_BACKUP' | awk '{print \$1}'")" = "$INCIDENT_OLD_SERVER_SHA"
 
-ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
-  "$INCIDENT_REMOTE_ROOT" "$INCIDENT_CAMERA_BACKUP" \
-  "$INCIDENT_SERVER_BACKUP" "$INCIDENT_OLD_CAMERA_SHA" \
-  "$INCIDENT_OLD_SERVER_SHA" "$INCIDENT_NEW_CAMERA_SHA" \
-  "$INCIDENT_NEW_SERVER_SHA" "$INCIDENT_STAMP" <<'REMOTE_ROLLBACK'
+INCIDENT_FALLBACK_CAMERA_SHA="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/camera.py' | awk '{print \$1}'")"
+INCIDENT_FALLBACK_SERVER_SHA="$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "sha256sum '$INCIDENT_REMOTE_ROOT/server.py' | awk '{print \$1}'")"
+
+if [ "$INCIDENT_FALLBACK_CAMERA_SHA" = "$INCIDENT_OLD_CAMERA_SHA" ] \
+   && [ "$INCIDENT_FALLBACK_SERVER_SHA" = "$INCIDENT_OLD_SERVER_SHA" ]; then
+  printf 'manual fallback: old file pair already present; resuming handoff\n'
+elif {
+       [ "$INCIDENT_FALLBACK_CAMERA_SHA" = "$INCIDENT_OLD_CAMERA_SHA" ] \
+         || [ "$INCIDENT_FALLBACK_CAMERA_SHA" = "$INCIDENT_NEW_CAMERA_SHA" ]
+     } && {
+       [ "$INCIDENT_FALLBACK_SERVER_SHA" = "$INCIDENT_OLD_SERVER_SHA" ] \
+         || [ "$INCIDENT_FALLBACK_SERVER_SHA" = "$INCIDENT_NEW_SERVER_SHA" ]
+     }; then
+  ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" bash -s -- \
+    "$INCIDENT_REMOTE_ROOT" "$INCIDENT_CAMERA_BACKUP" \
+    "$INCIDENT_SERVER_BACKUP" "$INCIDENT_OLD_CAMERA_SHA" \
+    "$INCIDENT_OLD_SERVER_SHA" "$INCIDENT_NEW_CAMERA_SHA" \
+    "$INCIDENT_NEW_SERVER_SHA" "$INCIDENT_STAMP" <<'REMOTE_ROLLBACK'
 set -euo pipefail
 root=$1
 camera_backup=$2
@@ -719,7 +1001,7 @@ server_new_sha=$7
 stamp=$8
 committed=0
 
-restore_new_pair() {
+restore_pre_pair() {
   mv -f -- "$root/.camera.py.pre-rollback-$stamp" "$root/camera.py"
   mv -f -- "$root/.server.py.pre-rollback-$stamp" "$root/server.py"
 }
@@ -727,15 +1009,23 @@ finish_rollback() {
   status=$?
   trap - EXIT HUP INT TERM
   if [ "$committed" -ne 1 ]; then
-    restore_new_pair
+    restore_pre_pair
   fi
   exit "$status"
 }
 
 test "$(sha256sum "$camera_backup" | awk '{print $1}')" = "$camera_old_sha"
 test "$(sha256sum "$server_backup" | awk '{print $1}')" = "$server_old_sha"
-test "$(sha256sum "$root/camera.py" | awk '{print $1}')" = "$camera_new_sha"
-test "$(sha256sum "$root/server.py" | awk '{print $1}')" = "$server_new_sha"
+camera_live_sha="$(sha256sum "$root/camera.py" | awk '{print $1}')"
+server_live_sha="$(sha256sum "$root/server.py" | awk '{print $1}')"
+case "$camera_live_sha" in
+  "$camera_old_sha"|"$camera_new_sha") ;;
+  *) exit 1 ;;
+esac
+case "$server_live_sha" in
+  "$server_old_sha"|"$server_new_sha") ;;
+  *) exit 1 ;;
+esac
 cp -a "$root/camera.py" "$root/.camera.py.pre-rollback-$stamp"
 cp -a "$root/server.py" "$root/.server.py.pre-rollback-$stamp"
 cp -a "$camera_backup" "$root/.camera.py.rollback-$stamp"
@@ -752,6 +1042,10 @@ rm -f -- \
   "$root/.camera.py.pre-rollback-$stamp" \
   "$root/.server.py.pre-rollback-$stamp"
 REMOTE_ROLLBACK
+else
+  printf 'manual fallback refused: live file pair contains an unknown hash\n' >&2
+  exit 1
+fi
 ```
 
 Because rollback may be recovering from a failed graceful-shutdown criterion,
@@ -827,6 +1121,12 @@ test "$(ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
   'systemctl show spacebio-gateway.service -p MainPID --value')" = "$INCIDENT_GATEWAY_PID_BEFORE"
 ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
   'curl -fsS --max-time 5 http://127.0.0.1:8000/ -o /dev/null'
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "curl -fsS --max-time 5 http://127.0.0.1:8000/api/control/status \
+   | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get(\"running\") is False, d'"
+ssh "${INCIDENT_SSH[@]}" "$INCIDENT_TARGET" \
+  "curl -fsS --max-time 5 http://127.0.0.1:8000/api/experiment/status \
+   | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get(\"running\") is False, d'"
 ```
 
 Report the failed criterion, both restored hashes, both rollback clinostat PIDs,
