@@ -41,6 +41,11 @@ class Camera:
         fps: int = 15,
         jpeg_quality: int = 75,
         idle_close_s: float = 3.0,
+        capture_timeout_s: float = 2.0,
+        unhealthy_after_s: float = 4.0,
+        recovery_backoff_s: float = 0.5,
+        stream_stall_timeout_s: float = 10.0,
+        clock=time.monotonic,
     ):
         self.device = device
         self.width = width
@@ -48,6 +53,11 @@ class Camera:
         self.fps = fps
         self.jpeg_quality = jpeg_quality
         self.idle_close_s = idle_close_s
+        self.capture_timeout_s = capture_timeout_s
+        self.unhealthy_after_s = unhealthy_after_s
+        self.recovery_backoff_s = recovery_backoff_s
+        self.stream_stall_timeout_s = stream_stall_timeout_s
+        self._clock = clock
 
         self._lock = threading.Lock()
         self._cap: cv2.VideoCapture | None = None
@@ -57,6 +67,8 @@ class Camera:
         self._stop = threading.Event()
         self._latest_jpeg: bytes | None = None
         self._frame_cond = threading.Condition()
+        self._frame_seq = 0
+        self._last_frame_t: float | None = None
         self._viewers = 0
         self._last_viewer_t = time.monotonic()  # avoid immediate idle-close on start
         self._last_error: str | None = None
@@ -75,15 +87,34 @@ class Camera:
         return self._viewers
 
     def status(self) -> dict:
+        is_open = self.is_open
+        with self._frame_cond:
+            last_frame_t = self._last_frame_t
+            frame_sequence = self._frame_seq
+            last_error = self._last_error
+        age = (
+            None
+            if last_frame_t is None
+            else max(0.0, self._clock() - last_frame_t)
+        )
+        healthy = (
+            is_open
+            and age is not None
+            and age <= self.unhealthy_after_s
+            and last_error is None
+        )
         return {
-            "open": self.is_open,
+            "open": is_open,
+            "healthy": healthy,
             "viewers": self._viewers,
             "device": self.device,
             "width": self.width,
             "height": self.height,
             "fps": self.fps,
             "backend": self._backend,
-            "error": self._last_error,
+            "error": last_error,
+            "frame_sequence": frame_sequence,
+            "last_frame_age_s": age,
         }
 
     # ─────────────────────────────────────────────────────────────────────
@@ -159,7 +190,7 @@ class Camera:
         if self._backend == "cv2" and self._cap is not None:
             return self._cap.read()
         if self._backend == "picamera2" and self._picam is not None:
-            rgb = self._picam.capture_array()
+            rgb = self._picam.capture_array(wait=self.capture_timeout_s)
             bgr = _np.ascontiguousarray(rgb[:, :, ::-1])
             return True, bgr
         return False, None
@@ -188,6 +219,9 @@ class Camera:
                 continue
             with self._frame_cond:
                 self._latest_jpeg = jpeg.tobytes()
+                self._frame_seq += 1
+                self._last_frame_t = self._clock()
+                self._last_error = None
                 self._frame_cond.notify_all()
             time.sleep(period)
         with self._lock:
@@ -225,9 +259,12 @@ class Camera:
     def get_frame(self, timeout: float = 2.0) -> bytes | None:
         """Block until the next JPEG frame is available; None on timeout."""
         with self._frame_cond:
-            if self._latest_jpeg is not None:
-                return self._latest_jpeg
-            self._frame_cond.wait(timeout=timeout)
+            starting_seq = self._frame_seq
+            if not self._frame_cond.wait_for(
+                lambda: self._frame_seq > starting_seq,
+                timeout=timeout,
+            ):
+                return None
             return self._latest_jpeg
 
     def snapshot(self, timeout: float = 2.0) -> bytes | None:
