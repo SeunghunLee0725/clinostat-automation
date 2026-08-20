@@ -330,6 +330,49 @@ def test_cv2_open_exception_releases_temporary_handle_and_reports_error(
     assert cam._frame_cond.notify_count == 1
 
 
+def test_cv2_optional_buffer_size_failure_does_not_abort_open(
+    camera_module, monkeypatch
+):
+    class BufferSizeUnsupportedCapture:
+        def __init__(self):
+            self.released = False
+            self.set_calls = []
+
+        def isOpened(self):
+            return True
+
+        def set(self, prop, value):
+            self.set_calls.append((prop, value))
+            if prop == camera_module.cv2.CAP_PROP_BUFFERSIZE:
+                raise RuntimeError('buffer size unsupported')
+            return True
+
+        def read(self):
+            return True, object()
+
+        def release(self):
+            self.released = True
+
+    temporary = BufferSizeUnsupportedCapture()
+    monkeypatch.setattr(
+        camera_module.cv2,
+        'VideoCapture',
+        lambda *_args: temporary,
+    )
+    cam = camera_module.Camera()
+
+    assert cam._open_cv2() is True
+    assert cam._backend == 'cv2'
+    assert cam._cap is temporary
+    assert temporary.released is False
+    assert temporary.set_calls == [
+        (camera_module.cv2.CAP_PROP_FRAME_WIDTH, cam.width),
+        (camera_module.cv2.CAP_PROP_FRAME_HEIGHT, cam.height),
+        (camera_module.cv2.CAP_PROP_FPS, cam.fps),
+        (camera_module.cv2.CAP_PROP_BUFFERSIZE, 1),
+    ]
+
+
 def test_viewer_preserves_detailed_cv2_open_error_without_fallback(
     camera_module, monkeypatch
 ):

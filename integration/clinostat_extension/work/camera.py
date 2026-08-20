@@ -142,7 +142,10 @@ class Camera:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             cap.set(cv2.CAP_PROP_FPS, self.fps)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
             # Verify we can actually read a frame (unicam may open but not deliver)
             ok, _ = cap.read()
             if not ok:
