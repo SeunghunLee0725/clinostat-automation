@@ -283,7 +283,7 @@ if [ -z "${BASH_VERSION:-}" ] || [ -n "${ZSH_VERSION:-}" ]; then
   printf 'Task 4 requires /bin/bash, not the host login shell\n' >&2
   exit 1
 fi
-set -Eeuo pipefail
+set -euo pipefail
 INCIDENT_BASH_PID=$$
 readonly INCIDENT_BASH_PID
 incident_require_bash() {
@@ -319,7 +319,7 @@ and record both service PIDs and both original file hashes:
 
 ```bash
 incident_require_bash || exit 1
-set -Eeuo pipefail
+set -euo pipefail
 INCIDENT_PI_HOST='100.77.1.42'
 INCIDENT_PI_USER='aiworker-1'
 INCIDENT_TARGET="${INCIDENT_PI_USER}@${INCIDENT_PI_HOST}"
