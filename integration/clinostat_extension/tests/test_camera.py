@@ -290,8 +290,20 @@ class RouteApp:
 
 def load_camera_stream_route(stream_camera):
     import anyio
+    from contextlib import asynccontextmanager
     from starlette.concurrency import run_in_threadpool
+    from starlette.requests import ClientDisconnect
     from starlette.responses import StreamingResponse
+    try:
+        from starlette._utils import create_collapsing_task_group
+    except ImportError:
+        from starlette._utils import collapse_excgroups
+
+        @asynccontextmanager
+        async def create_collapsing_task_group():
+            with collapse_excgroups():
+                async with anyio.create_task_group() as task_group:
+                    yield task_group
 
     tree = ast.parse(WORK_SERVER.read_text(encoding='utf-8'))
     selected = [
@@ -308,6 +320,8 @@ def load_camera_stream_route(stream_camera):
     ]
     namespace = {
         'anyio': anyio,
+        'ClientDisconnect': ClientDisconnect,
+        'create_collapsing_task_group': create_collapsing_task_group,
         'StreamingResponse': StreamingResponse,
         'run_in_threadpool': run_in_threadpool,
         'camera': stream_camera,
@@ -401,6 +415,69 @@ def test_camera_stream_disconnect_after_chunk_closes_generator_and_releases_view
     assert close_calls[0] != loop_thread
 
 
+def test_camera_stream_asgi24_silent_send_disconnect_releases_viewer(camera_module):
+    cam = camera_module.Camera(stream_stall_timeout_s=5.0)
+    cam._ensure_running = lambda: None
+    underlying = cam.mjpeg_generator()
+    tracked = TrackingCloseIterator(underlying)
+    route = load_camera_stream_route(StreamCamera(tracked, camera=cam))
+
+    async def scenario():
+        disconnect = asyncio.Event()
+        response_finished = asyncio.Event()
+        loop_thread = threading.get_ident()
+
+        async def receive():
+            await disconnect.wait()
+            return {'type': 'http.disconnect'}
+
+        async def send(message):
+            if (
+                message['type'] == 'http.response.body'
+                and message.get('body')
+            ):
+                disconnect.set()
+            # Uvicorn h11 returns silently after it marks the peer disconnected.
+
+        async def run_response(response):
+            try:
+                await response(http_scope('2.4'), receive, send)
+            finally:
+                response_finished.set()
+
+        async def publish_after_viewer_enters():
+            deadline = asyncio.get_running_loop().time() + 0.5
+            while cam.viewer_count != 1:
+                assert asyncio.get_running_loop().time() < deadline
+                await asyncio.sleep(0)
+            with cam._frame_cond:
+                cam._latest_jpeg = b'fresh-frame'
+                cam._frame_seq += 1
+                cam._frame_cond.notify_all()
+
+        response = await route()
+        response_task = asyncio.create_task(run_response(response))
+        try:
+            await publish_after_viewer_enters()
+            await asyncio.wait_for(response_finished.wait(), timeout=0.5)
+        finally:
+            if not response_task.done():
+                cam._stop.set()
+                with cam._frame_cond:
+                    cam._frame_cond.notify_all()
+            await asyncio.gather(response_task, return_exceptions=True)
+        return loop_thread, cam.viewer_count, list(tracked.close_calls)
+
+    try:
+        loop_thread, viewer_count, close_calls = asyncio.run(scenario())
+    finally:
+        underlying.close()
+
+    assert viewer_count == 0
+    assert len(close_calls) == 1
+    assert close_calls[0] != loop_thread
+
+
 def test_camera_stream_cancel_waits_for_inflight_next_before_closing(camera_module):
     import anyio
 
@@ -431,7 +508,7 @@ def test_camera_stream_cancel_waits_for_inflight_next_before_closing(camera_modu
         loop_thread = threading.get_ident()
 
         async def receive():
-            raise AssertionError('ASGI 2.4 response must not poll receive')
+            await asyncio.Event().wait()
 
         async def send(message):
             if (
@@ -516,7 +593,7 @@ def test_camera_stream_natural_completion_closes_exactly_once_off_event_loop():
         loop_thread = threading.get_ident()
 
         async def receive():
-            raise AssertionError('ASGI 2.4 response must not poll receive')
+            await asyncio.Event().wait()
 
         async def send(message):
             messages.append(message)
@@ -567,7 +644,7 @@ def test_camera_stream_send_error_closes_and_preserves_client_disconnect():
         loop_thread = threading.get_ident()
 
         async def receive():
-            raise AssertionError('ASGI 2.4 response must not poll receive')
+            await asyncio.Event().wait()
 
         async def send(message):
             if (
@@ -618,7 +695,7 @@ def test_camera_stream_task_group_cancellation_shields_iterator_close():
         loop_thread = threading.get_ident()
 
         async def receive():
-            raise AssertionError('ASGI 2.4 response must not poll receive')
+            await asyncio.Event().wait()
 
         async def send(message):
             if (

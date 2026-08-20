@@ -21,6 +21,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
+
+try:
+    from starlette._utils import create_collapsing_task_group
+except ImportError:
+    from starlette._utils import collapse_excgroups
+
+    @asynccontextmanager
+    async def create_collapsing_task_group():
+        with collapse_excgroups():
+            async with anyio.create_task_group() as task_group:
+                yield task_group
 
 from modbus_rtu import ACServo, BLDCMotor
 from sensor import WitMotionSensor
@@ -56,7 +68,26 @@ class CloseableStreamingResponse(StreamingResponse):
     async def __call__(self, scope, receive, send):
         response_failed = True
         try:
-            await super().__call__(scope, receive, send)
+            async with create_collapsing_task_group() as task_group:
+                async def stream_response():
+                    try:
+                        await self.stream_response(send)
+                    except OSError as exc:
+                        raise ClientDisconnect() from exc
+                    finally:
+                        task_group.cancel_scope.cancel()
+
+                async def listen_for_disconnect():
+                    try:
+                        await self.listen_for_disconnect(receive)
+                    finally:
+                        task_group.cancel_scope.cancel()
+
+                task_group.start_soon(stream_response)
+                await listen_for_disconnect()
+
+            if self.background is not None:
+                await self.background()
             response_failed = False
         finally:
             if response_failed:
