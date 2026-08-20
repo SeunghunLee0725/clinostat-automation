@@ -211,22 +211,49 @@ class Camera:
             self._latest_jpeg = None
             self._frame_cond.notify_all()
 
-    def _read_frame(self) -> tuple[bool, object]:
-        if self._backend == "cv2" and self._cap is not None:
-            return self._cap.read()
-        if self._backend == "picamera2" and self._picam is not None:
-            rgb = self._picam.capture_array(wait=self.capture_timeout_s)
+    def _read_frame(
+        self,
+        backend: str | None = None,
+        backend_handle: object | None = None,
+    ) -> tuple[bool, object]:
+        if backend is None:
+            backend = self._backend
+            if backend == "cv2":
+                backend_handle = self._cap
+            elif backend == "picamera2":
+                backend_handle = self._picam
+        if backend == "cv2" and backend_handle is not None:
+            return backend_handle.read()
+        if backend == "picamera2" and backend_handle is not None:
+            rgb = backend_handle.capture_array(wait=self.capture_timeout_s)
             bgr = _np.ascontiguousarray(rgb[:, :, ::-1])
             return True, bgr
         return False, None
 
     def _capture_loop(self) -> None:
+        worker = threading.current_thread()
         period = 1.0 / max(1, self.fps)
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
         backend = "none"
         backend_handle = None
+
+        def backend_is_current() -> bool:
+            return (
+                backend == "cv2"
+                and backend_handle is not None
+                and self._backend == backend
+                and self._cap is backend_handle
+            ) or (
+                backend == "picamera2"
+                and backend_handle is not None
+                and self._backend == backend
+                and self._picam is backend_handle
+            )
+
         while not self._stop.is_set():
             with self._lock:
+                if self._capture_thread is not worker:
+                    return
                 if self._viewers == 0:
                     if time.monotonic() - self._last_viewer_t > self.idle_close_s:
                         self._close()
@@ -248,6 +275,8 @@ class Camera:
                 if self._stop.wait(self.recovery_backoff_s):
                     break
                 with self._lock:
+                    if self._capture_thread is not worker:
+                        return
                     if (
                         not self._stop.is_set()
                         and self._viewers > 0
@@ -256,60 +285,61 @@ class Camera:
                         self._open()
                 continue
             try:
-                ok, frame = self._read_frame()
+                ok, frame = self._read_frame(backend, backend_handle)
             except Exception as exc:
-                self._set_error(
-                    f"{backend} capture failed: "
-                    f"{type(exc).__name__}: {exc}"
-                )
                 with self._lock:
-                    failed_backend_is_current = (
-                        backend == "cv2"
-                        and backend_handle is not None
-                        and self._backend == backend
-                        and self._cap is backend_handle
-                    ) or (
-                        backend == "picamera2"
-                        and backend_handle is not None
-                        and self._backend == backend
-                        and self._picam is backend_handle
+                    if self._capture_thread is not worker:
+                        return
+                    if not backend_is_current():
+                        break
+                    self._set_error(
+                        f"{backend} capture failed: "
+                        f"{type(exc).__name__}: {exc}"
                     )
-                    if failed_backend_is_current:
-                        if backend == "picamera2":
-                            try:
-                                backend_handle.cancel_all_and_flush()
-                            except Exception:
-                                pass
-                        self._close()
+                    if backend == "picamera2":
+                        try:
+                            backend_handle.cancel_all_and_flush()
+                        except Exception:
+                            pass
+                    self._close()
                 continue
-            if not ok or frame is None:
-                self._set_error("read failed")
+            read_failed = not ok or frame is None
+            with self._lock:
+                if self._capture_thread is not worker:
+                    return
+                if not backend_is_current():
+                    break
+                if read_failed:
+                    self._set_error("read failed")
+            if read_failed:
                 time.sleep(0.1)
                 continue
             ok2, jpeg = cv2.imencode(".jpg", frame, encode_param)
             if not ok2:
+                with self._lock:
+                    if self._capture_thread is not worker:
+                        return
+                    if not backend_is_current():
+                        break
                 time.sleep(0.05)
                 continue
-            with self._frame_cond:
-                self._latest_jpeg = jpeg.tobytes()
-                self._frame_seq += 1
-                self._last_frame_t = self._clock()
-                self._last_error = None
-                self._frame_cond.notify_all()
+            jpeg_bytes = jpeg.tobytes()
+            with self._lock:
+                if self._capture_thread is not worker:
+                    return
+                if not backend_is_current():
+                    break
+                with self._frame_cond:
+                    self._latest_jpeg = jpeg_bytes
+                    self._frame_seq += 1
+                    self._last_frame_t = self._clock()
+                    self._last_error = None
+                    self._frame_cond.notify_all()
             time.sleep(period)
         with self._lock:
-            worker_backend_is_current = (
-                backend == "cv2"
-                and backend_handle is not None
-                and self._backend == backend
-                and self._cap is backend_handle
-            ) or (
-                backend == "picamera2"
-                and backend_handle is not None
-                and self._backend == backend
-                and self._picam is backend_handle
-            )
-            if self._backend == "none" or worker_backend_is_current:
+            if self._capture_thread is not worker:
+                return
+            if self._backend == "none" or backend_is_current():
                 self._close()
             self._capture_thread = None
             return

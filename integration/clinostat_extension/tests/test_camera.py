@@ -504,8 +504,9 @@ def test_read_failure_updates_error_under_condition_and_notifies(
     cam._viewers = 1
     cam._frame_cond = RecordingCondition()
     cam._close = lambda: None
+    cam._capture_thread = threading.current_thread()
 
-    def failed_read():
+    def failed_read(*_args):
         cam._stop.set()
         return False, None
 
@@ -530,9 +531,10 @@ def test_publishing_encoded_frames_updates_health_state_and_notifies(
     cam._last_error = 'prior read failed'
     cam._frame_cond = RecordingCondition()
     cam._close = lambda: None
+    cam._capture_thread = threading.current_thread()
     read_count = 0
 
-    def read_frame():
+    def read_frame(*_args):
         nonlocal read_count
         read_count += 1
         fake_clock.now = 100.0 + read_count
@@ -703,6 +705,8 @@ def test_stale_failed_read_does_not_close_replacement_backend(camera_module):
         cam._close()
         cam._backend = 'picamera2'
         cam._picam = replacement
+        with cam._frame_cond:
+            cam._last_error = 'replacement still starting'
     cam._stop.set()
     release_failed_read.set()
     worker.join(timeout=1.0)
@@ -712,9 +716,132 @@ def test_stale_failed_read_does_not_close_replacement_backend(camera_module):
     assert replacement_calls == []
     assert cam._backend == 'picamera2'
     assert cam._picam is replacement
-    assert cam._last_error == (
-        'picamera2 capture failed: TimeoutError: old read timed out'
-    )
+    assert cam._last_error == 'replacement still starting'
+
+
+def test_stale_worker_cannot_adopt_backend_owned_by_replacement_worker(
+    camera_module
+):
+    old_read_started = threading.Event()
+    release_old_read = threading.Event()
+    replacement_read_started = threading.Event()
+    release_replacement_read = threading.Event()
+    replacement_calls = []
+
+    class OldPicamera:
+        def capture_array(self, *, wait):
+            assert wait == 2.0
+            old_read_started.set()
+            assert release_old_read.wait(timeout=1.0)
+            raise TimeoutError('stale timeout')
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    class ReplacementPicamera:
+        def capture_array(self, *, wait):
+            assert wait == 2.0
+            replacement_read_started.set()
+            assert release_replacement_read.wait(timeout=1.0)
+            return RGBFrame()
+
+        def cancel_all_and_flush(self):
+            replacement_calls.append('cancel_all_and_flush')
+
+        def stop(self):
+            replacement_calls.append('stop')
+
+        def close(self):
+            replacement_calls.append('close')
+
+    cam = camera_module.Camera()
+    cam._backend = 'picamera2'
+    cam._picam = OldPicamera()
+    cam._viewers = 1
+    old_worker = threading.Thread(target=cam._capture_loop, daemon=True)
+    cam._capture_thread = old_worker
+    old_worker.start()
+    assert old_read_started.wait(timeout=0.5)
+
+    replacement = ReplacementPicamera()
+    replacement_owner = object()
+    with cam._lock:
+        cam._backend = 'picamera2'
+        cam._picam = replacement
+        cam._capture_thread = replacement_owner
+        with cam._frame_cond:
+            cam._latest_jpeg = b'replacement-cached-frame'
+            cam._frame_seq = 11
+            cam._last_frame_t = 123.0
+            cam._last_error = 'replacement still starting'
+    release_old_read.set()
+    old_worker.join(timeout=0.2)
+    exited_without_forced_stop = not old_worker.is_alive()
+    if old_worker.is_alive():
+        cam._stop.set()
+        release_replacement_read.set()
+        old_worker.join(timeout=0.5)
+
+    assert exited_without_forced_stop is True
+    assert old_worker.is_alive() is False
+    assert replacement_read_started.is_set() is False
+    assert replacement_calls == []
+    assert cam._backend == 'picamera2'
+    assert cam._picam is replacement
+    assert cam._capture_thread is replacement_owner
+    with cam._frame_cond:
+        assert cam._latest_jpeg == b'replacement-cached-frame'
+        assert cam._frame_seq == 11
+        assert cam._last_frame_t == 123.0
+        assert cam._last_error == 'replacement still starting'
+
+
+def test_stale_worker_reads_snapshotted_handle_not_replacement(camera_module):
+    old_reads = []
+    replacement_reads = []
+
+    class OldPicamera:
+        def capture_array(self, *, wait):
+            old_reads.append(wait)
+            return RGBFrame()
+
+    class ReplacementPicamera:
+        def capture_array(self, *, wait):
+            replacement_reads.append(wait)
+            return RGBFrame()
+
+    cam = camera_module.Camera()
+    old = OldPicamera()
+    replacement = ReplacementPicamera()
+    cam._backend = 'picamera2'
+    cam._picam = old
+    cam._viewers = 1
+    gap_lock = TeardownGapLock()
+    cam._lock = gap_lock
+    old_worker = threading.Thread(target=cam._capture_loop, daemon=True)
+    replacement_owner = object()
+    gap_lock.pause_thread = old_worker
+    cam._capture_thread = old_worker
+    old_worker.start()
+    assert gap_lock.paused.wait(timeout=0.5)
+
+    with cam._lock:
+        cam._backend = 'picamera2'
+        cam._picam = replacement
+        cam._capture_thread = replacement_owner
+    gap_lock.resume.set()
+    old_worker.join(timeout=0.5)
+
+    assert gap_lock.timed_out.is_set() is False
+    assert old_worker.is_alive() is False
+    assert old_reads == [2.0]
+    assert replacement_reads == []
+    assert cam._backend == 'picamera2'
+    assert cam._picam is replacement
+    assert cam._capture_thread is replacement_owner
 
 
 def test_initial_open_failure_keeps_viewer_owned_worker_retrying(
