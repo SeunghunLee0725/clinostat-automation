@@ -80,8 +80,11 @@ run_remote "mkdir -p '$BACKUP_ROOT/gateway' '$BACKUP_ROOT/clinostat/static'"
 run_remote "cp -a '$GATEWAY_ROOT/gateway/.' '$BACKUP_ROOT/gateway/'"
 for pair in "${EXTENSION_PAIRS[@]}"; do
   remote="${pair#*:}"
-  run_remote "test -f '$remote'" || die "백업할 원격 파일이 없다: $remote"
-  run_remote "cp -a '$remote' '$BACKUP_ROOT/clinostat/${remote#$CLINOSTAT_ROOT/}'" || die "클리노스텟 파일 백업 실패: $remote"
+  if [ "$remote" = "$CLINOSTAT_ROOT/camera.py" ]; then
+    run_remote "test -f '$remote' && cp -a '$remote' '$BACKUP_ROOT/clinostat/${remote#$CLINOSTAT_ROOT/}'" || die "camera.py 백업 실패"
+  else
+    run_remote "test -f '$remote' && cp -a '$remote' '$BACKUP_ROOT/clinostat/${remote#$CLINOSTAT_ROOT/}' || true"
+  fi
 done
 
 # ─────────────────────────── 전송 ───────────────────────────

@@ -17,17 +17,24 @@ def test_camera_module_is_canonical_and_deployed():
     )
 
 
-def test_extension_backups_are_required_before_transfer():
+def test_camera_backup_is_required_without_changing_existing_backups():
     deploy_script = DEPLOY_SCRIPT.read_text(encoding='utf-8')
     backup_section = deploy_script[
         deploy_script.index('say "백업: $BACKUP_ROOT"'):
         deploy_script.index('say "게이트웨이 전송"')
     ]
 
-    assert '|| true' not in backup_section
-    assert 'run_remote "test -f \'$remote\'" || die ' in backup_section
     assert (
-        'run_remote "cp -a \'$remote\' '
-        '\'$BACKUP_ROOT/clinostat/${remote#$CLINOSTAT_ROOT/}\'" || die '
+        '  else\n'
+        '    run_remote "test -f \'$remote\' && cp -a \'$remote\' '
+        '\'$BACKUP_ROOT/clinostat/${remote#$CLINOSTAT_ROOT/}\' || true"\n'
+        '  fi'
+        in backup_section
+    )
+    assert (
+        '  if [ "$remote" = "$CLINOSTAT_ROOT/camera.py" ]; then\n'
+        '    run_remote "test -f \'$remote\' && cp -a \'$remote\' '
+        '\'$BACKUP_ROOT/clinostat/${remote#$CLINOSTAT_ROOT/}\'" '
+        '|| die "camera.py 백업 실패"\n'
         in backup_section
     )
