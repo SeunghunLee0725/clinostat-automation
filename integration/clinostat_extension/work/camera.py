@@ -87,11 +87,14 @@ class Camera:
         return self._viewers
 
     def status(self) -> dict:
-        is_open = self.is_open
-        with self._frame_cond:
-            last_frame_t = self._last_frame_t
-            frame_sequence = self._frame_seq
-            last_error = self._last_error
+        with self._lock:
+            is_open = self.is_open
+            viewers = self._viewers
+            backend = self._backend
+            with self._frame_cond:
+                last_frame_t = self._last_frame_t
+                frame_sequence = self._frame_seq
+                last_error = self._last_error
         age = (
             None
             if last_frame_t is None
@@ -106,12 +109,12 @@ class Camera:
         return {
             "open": is_open,
             "healthy": healthy,
-            "viewers": self._viewers,
+            "viewers": viewers,
             "device": self.device,
             "width": self.width,
             "height": self.height,
             "fps": self.fps,
-            "backend": self._backend,
+            "backend": backend,
             "error": last_error,
             "frame_sequence": frame_sequence,
             "last_frame_age_s": age,

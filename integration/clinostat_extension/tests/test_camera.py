@@ -135,6 +135,28 @@ class AttemptRecordingCondition(threading.Condition):
         return super().__enter__()
 
 
+class AttemptRecordingLock:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.enter_attempted = threading.Event()
+        self.progress = threading.Event()
+
+    def acquire(self):
+        return self._lock.acquire()
+
+    def release(self):
+        return self._lock.release()
+
+    def __enter__(self):
+        self.enter_attempted.set()
+        self.progress.set()
+        self.acquire()
+        return self
+
+    def __exit__(self, *_args):
+        self.release()
+
+
 def test_camera_module_is_canonical_and_deployed():
     assert WORK_CAMERA.is_file()
 
@@ -293,6 +315,44 @@ def test_status_waits_for_a_coherent_frame_publication(camera_module):
             'last_frame_age_s': 0.0,
         }
     ]
+
+
+def test_status_waits_for_a_concurrent_close_transaction(camera_module):
+    fake_clock = FakeClock(now=10.0)
+    cam = camera_module.Camera(clock=fake_clock)
+    cam._backend = 'picamera2'
+    cam._picam = object()
+    cam._viewers = 1
+    cam._last_frame_t = 9.0
+    cam._frame_seq = 3
+    cam._last_error = None
+    cam._lock = AttemptRecordingLock()
+    finished = threading.Event()
+    result = []
+
+    def read_status():
+        result.append(cam.status())
+        finished.set()
+        cam._lock.progress.set()
+
+    cam._lock.acquire()
+    reader = threading.Thread(target=read_status, daemon=True)
+    try:
+        reader.start()
+        assert cam._lock.progress.wait(timeout=1.0)
+        cam._close()
+    finally:
+        cam._lock.release()
+    reader.join(timeout=1.0)
+
+    assert cam._lock.enter_attempted.is_set() is True
+    assert finished.is_set() is True
+    assert result[0]['open'] is False
+    assert result[0]['healthy'] is False
+    assert result[0]['backend'] == 'none'
+    assert result[0]['viewers'] == 1
+    assert result[0]['frame_sequence'] == 3
+    assert result[0]['last_frame_age_s'] == 1.0
 
 
 def test_publishing_encoded_frames_updates_health_state_and_notifies(
