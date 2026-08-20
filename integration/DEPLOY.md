@@ -75,8 +75,8 @@ curl -s localhost:8010/health
     requirements.txt, constraints-*.txt
 
 /home/<사용자>/clinostat/              ← 기존 클리노스텟 앱 (이미 있다)
-    server.py, spacebio_proxy.py, static/index.html   ← 이 저장소가 덮어쓰는 3개
-    control_loop.py, camera.py, ...                   ← 건드리지 않는다
+    camera.py, server.py, spacebio_proxy.py, static/index.html  ← 이 저장소가 덮어쓰는 4개
+    control_loop.py, ...                                      ← 건드리지 않는다
 
 /home/<사용자>/spacebio-data/sessions/ ← 측정 기록이 쌓이는 곳
 ```
@@ -180,7 +180,8 @@ DRY_RUN=1 ... bash deploy/deploy_to_pi.sh     # 보낼 파일만 확인
 2. **측정 중이면 중단** — 게이트웨이 재시작은 BLE를 끊고 세션을 자른다 (`FORCE=1`로 무시 가능)
 3. 로컬 테스트 실행 — 깨졌으면 배포하지 않는다
 4. `~/spacebio-backups/<타임스탬프>/` 로 백업
-5. `gateway/*.py` 와 확장 3개 파일 전송 (config.yaml 제외)
+5. `gateway/*.py` 와 확장 4개 파일 전송 (`camera.py`, `server.py`,
+   `spacebio_proxy.py`, `static/index.html`; config.yaml 제외)
 6. 두 서비스 재시작 후 4가지 검증. 실패하면 되돌리는 명령을 출력한다
 
 인증은 SSH 키로 한다. 스크립트는 암호를 인자로 받지 않는다.
