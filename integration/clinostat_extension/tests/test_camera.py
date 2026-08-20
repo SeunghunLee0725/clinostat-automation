@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import sys
 import threading
@@ -10,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORK_CAMERA = ROOT / 'work' / 'camera.py'
+WORK_SERVER = ROOT / 'work' / 'server.py'
 DEPLOY_SCRIPT = ROOT.parents[0] / 'deploy' / 'deploy_to_pi.sh'
 
 
@@ -108,7 +110,12 @@ class FakeClock:
 class RecordingCondition(threading.Condition):
     def __init__(self):
         super().__init__()
+        self.enter_count = 0
         self.notify_count = 0
+
+    def __enter__(self):
+        self.enter_count += 1
+        return super().__enter__()
 
     def notify_all(self):
         self.notify_count += 1
@@ -157,6 +164,34 @@ class AttemptRecordingLock:
         self.release()
 
 
+class TeardownGapLock:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.pause_thread = None
+        self.paused = threading.Event()
+        self.resume = threading.Event()
+        self.timed_out = threading.Event()
+        self._did_pause = False
+
+    def acquire(self):
+        return self._lock.acquire()
+
+    def release(self):
+        return self._lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *_args):
+        self.release()
+        if threading.current_thread() is self.pause_thread and not self._did_pause:
+            self._did_pause = True
+            self.paused.set()
+            if not self.resume.wait(timeout=1.0):
+                self.timed_out.set()
+
+
 def test_camera_module_is_canonical_and_deployed():
     assert WORK_CAMERA.is_file()
 
@@ -189,6 +224,18 @@ def test_camera_backup_is_required_without_changing_existing_backups():
         '|| die "camera.py 백업 실패"\n'
         in backup_section
     )
+
+
+def test_camera_snapshot_route_is_synchronous():
+    tree = ast.parse(WORK_SERVER.read_text(encoding='utf-8'))
+    route = next(
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == 'camera_snapshot'
+    )
+
+    assert type(route) is ast.FunctionDef
 
 
 def test_constructor_accepts_camera_recovery_timings_and_clock(camera_module):
@@ -355,6 +402,113 @@ def test_status_waits_for_a_concurrent_close_transaction(camera_module):
     assert result[0]['last_frame_age_s'] == 1.0
 
 
+def test_idle_exit_and_worker_clear_are_atomic_for_restart(
+    camera_module, monkeypatch
+):
+    cam = camera_module.Camera(idle_close_s=-1.0)
+    cam._backend = 'picamera2'
+    cam._picam = object()
+    gap_lock = TeardownGapLock()
+    cam._lock = gap_lock
+    close_calls = 0
+    original_close = cam._close
+
+    def recording_close():
+        nonlocal close_calls
+        close_calls += 1
+        original_close()
+
+    cam._close = recording_close
+    worker = threading.Thread(target=cam._capture_loop, daemon=True)
+    gap_lock.pause_thread = worker
+    cam._capture_thread = worker
+    worker.start()
+    assert gap_lock.paused.wait(timeout=1.0)
+
+    replacement_backend = object()
+
+    def reopen():
+        cam._backend = 'picamera2'
+        cam._picam = replacement_backend
+        return True
+
+    class ReplacementThread:
+        instances = []
+
+        def __init__(self, *, target, daemon):
+            self.target = target
+            self.daemon = daemon
+            self.started = False
+            type(self).instances.append(self)
+
+        def start(self):
+            self.viewer_count_at_start = cam._viewers
+            self.started = True
+
+        def is_alive(self):
+            return self.started
+
+    cam._open = reopen
+    monkeypatch.setattr(camera_module.threading, 'Thread', ReplacementThread)
+    viewer = cam.viewer()
+    viewer.__enter__()
+    try:
+        gap_lock.resume.set()
+        worker.join(timeout=1.0)
+
+        assert gap_lock.timed_out.is_set() is False
+        assert worker.is_alive() is False
+        assert close_calls == 1
+        assert len(ReplacementThread.instances) == 1
+        replacement = ReplacementThread.instances[0]
+        assert replacement.started is True
+        assert replacement.viewer_count_at_start == 1
+        assert cam._capture_thread is replacement
+        assert cam._backend == 'picamera2'
+        assert cam._picam is replacement_backend
+    finally:
+        viewer.__exit__(None, None, None)
+
+
+def test_close_clears_cached_frame_under_condition_and_notifies(camera_module):
+    cam = camera_module.Camera()
+    cam._backend = 'picamera2'
+    cam._picam = object()
+    cam._latest_jpeg = b'cached'
+    cam._frame_cond = RecordingCondition()
+
+    with cam._lock:
+        cam._close()
+
+    assert cam._latest_jpeg is None
+    assert cam._frame_cond.enter_count == 1
+    assert cam._frame_cond.notify_count == 1
+
+
+def test_read_failure_updates_error_under_condition_and_notifies(
+    camera_module, monkeypatch
+):
+    cam = camera_module.Camera()
+    cam._backend = 'picamera2'
+    cam._picam = object()
+    cam._viewers = 1
+    cam._frame_cond = RecordingCondition()
+    cam._close = lambda: None
+
+    def failed_read():
+        cam._stop.set()
+        return False, None
+
+    cam._read_frame = failed_read
+    monkeypatch.setattr(camera_module.time, 'sleep', lambda _seconds: None)
+
+    cam._capture_loop()
+
+    assert cam._last_error == 'read failed'
+    assert cam._frame_cond.enter_count == 1
+    assert cam._frame_cond.notify_count == 1
+
+
 def test_publishing_encoded_frames_updates_health_state_and_notifies(
     camera_module, monkeypatch
 ):
@@ -365,6 +519,7 @@ def test_publishing_encoded_frames_updates_health_state_and_notifies(
     cam._viewers = 1
     cam._last_error = 'prior read failed'
     cam._frame_cond = RecordingCondition()
+    cam._close = lambda: None
     read_count = 0
 
     def read_frame():

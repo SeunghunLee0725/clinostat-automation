@@ -67,6 +67,10 @@ class Camera:
         self._stop = threading.Event()
         self._latest_jpeg: bytes | None = None
         self._frame_cond = threading.Condition()
+        # _lock owns backend, viewer, and capture-worker lifecycle state.
+        # _frame_cond owns latest-frame, sequence, timestamp, and error state.
+        # When both are needed, always acquire _lock before _frame_cond.
+        # Code holding _frame_cond must never acquire _lock.
         self._frame_seq = 0
         self._last_frame_t: float | None = None
         self._viewers = 0
@@ -121,6 +125,13 @@ class Camera:
         }
 
     # ─────────────────────────────────────────────────────────────────────
+    def _set_error(self, error: str | None) -> None:
+        with self._frame_cond:
+            changed = self._last_error != error
+            self._last_error = error
+            if changed:
+                self._frame_cond.notify_all()
+
     def _open_cv2(self) -> bool:
         cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
         if not cap.isOpened():
@@ -140,7 +151,7 @@ class Camera:
             return False
         self._cap = cap
         self._backend = "cv2"
-        self._last_error = None
+        self._set_error(None)
         return True
 
     def _open_picamera2(self) -> bool:
@@ -157,10 +168,10 @@ class Camera:
             picam.start()
             self._picam = picam
             self._backend = "picamera2"
-            self._last_error = None
+            self._set_error(None)
             return True
         except Exception as exc:
-            self._last_error = f"picamera2: {exc}"
+            self._set_error(f"picamera2: {exc}")
             return False
 
     def _open(self) -> bool:
@@ -168,7 +179,9 @@ class Camera:
             return True
         if self._open_picamera2():
             return True
-        self._last_error = f"cannot open {self.device} (tried cv2+V4L2 and picamera2)"
+        self._set_error(
+            f"cannot open {self.device} (tried cv2+V4L2 and picamera2)"
+        )
         self._backend = "none"
         return False
 
@@ -187,7 +200,9 @@ class Camera:
                 pass
         self._picam = None
         self._backend = "none"
-        self._latest_jpeg = None
+        with self._frame_cond:
+            self._latest_jpeg = None
+            self._frame_cond.notify_all()
 
     def _read_frame(self) -> tuple[bool, object]:
         if self._backend == "cv2" and self._cap is not None:
@@ -206,14 +221,15 @@ class Camera:
                 if self._viewers == 0:
                     if time.monotonic() - self._last_viewer_t > self.idle_close_s:
                         self._close()
-                        break
+                        self._capture_thread = None
+                        return
                 backend = self._backend
             if backend == "none":
                 time.sleep(0.05)
                 continue
             ok, frame = self._read_frame()
             if not ok or frame is None:
-                self._last_error = "read failed"
+                self._set_error("read failed")
                 time.sleep(0.1)
                 continue
             ok2, jpeg = cv2.imencode(".jpg", frame, encode_param)
@@ -229,7 +245,8 @@ class Camera:
             time.sleep(period)
         with self._lock:
             self._close()
-        self._capture_thread = None
+            self._capture_thread = None
+            return
 
     # ─────────────────────────────────────────────────────────────────────
     def _ensure_running(self) -> None:
@@ -249,10 +266,10 @@ class Camera:
     def viewer(self):
         """Use as `with camera.viewer():` while serving a stream. Reference
         counts the active viewer; on exit, schedules idle close."""
-        self._ensure_running()
         with self._lock:
             self._viewers += 1
         try:
+            self._ensure_running()
             yield self
         finally:
             with self._lock:
@@ -304,7 +321,8 @@ class Camera:
         self._stop.set()
         with self._frame_cond:
             self._frame_cond.notify_all()
-        t = self._capture_thread
+        with self._lock:
+            t = self._capture_thread
         if t is not None:
             t.join(timeout=1.0)
         with self._lock:

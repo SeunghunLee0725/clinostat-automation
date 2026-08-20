@@ -84,7 +84,8 @@ def test_work_copies_are_a_superset_of_the_captured_baseline():
     "기존 화면을 보존한다"는 계약의 실질이다.
 
     예외: `stopAllMotion()`은 기존 정지 호출을 보존한 채 펌프 정지를 덧붙이도록
-    의도적으로 확장했다(설계 스펙 6.1). 그 함수 본문의 줄만 면제한다.
+    의도적으로 확장했다(설계 스펙 6.1). 카메라 스냅샷 핸들러는 블로킹 캡처를
+    FastAPI 스레드풀에서 실행하도록 동기 함수로 전환했다. 이 변경 줄만 면제한다.
     """
     for name in ("server.py", "static/index.html"):
         baseline_lines = (BASELINE / name).read_text(encoding="utf-8").splitlines()
@@ -92,6 +93,7 @@ def test_work_copies_are_a_superset_of_the_captured_baseline():
         work_lines = set(work_text.splitlines())
 
         exempt = {
+            "async def camera_snapshot():",
             "  await api('POST', '/api/control/stop');",
             "  const next = cloneData(appState.controlConfig);",
             "  next.outer.enabled = false;",

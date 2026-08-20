@@ -852,7 +852,7 @@ async def camera_status():
 
 
 @app.get("/api/camera/snapshot")
-async def camera_snapshot():
+def camera_snapshot():
     """현재 프레임 1장을 JPEG으로 반환."""
     jpeg = camera.snapshot(timeout=3.0)
     if jpeg is None:
