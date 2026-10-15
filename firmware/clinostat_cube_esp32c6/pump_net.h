@@ -37,6 +37,9 @@ public:
 
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
+    // 2026-10-15 실측: 절전 모드에서 보드가 SYN 은 보내는데 AP 가 되돌려주는 SYN-ACK 을
+    // 못 받아 rc=-2 를 무한 반복했다(리셋하면 바로 붙음). 절전을 끄고, 아래 tick() 의
+    // 연속 실패 복구(WiFi 재연결 → 재부팅)로 살아 있는 채 갇히는 일을 막는다.
     startWifi();
   }
 
@@ -79,6 +82,7 @@ public:
                     WIFI_SSID, WiFi.localIP().toString().c_str(),
                     WiFi.subnetMask().toString().c_str(), WiFi.RSSI());
       MDNS.begin("s25007board");
+      WiFi.setSleep(false);   // 연결 전에 부르면 STA 가 뜨지 않았다(2026-10-15 실측)
     }
 
     if (_mqtt.connected()) { _mqtt.loop(); return; }
@@ -91,14 +95,39 @@ public:
     Serial.print("MQTT 접속...");
     if (_mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS)) {
       Serial.println("성공");
+      _mqttFails = 0; _wifiRestarts = 0;
       for (int i = 0; i < PUMP_COUNT; i++) _mqtt.subscribe(TOPIC_CMD[i]);
     } else {
-      Serial.printf("실패 rc=%d (3s 후 재시도) — 오프라인이어도 시리얼로 제어 가능\n",
-                    _mqtt.state());
+      _mqttFails++;
+      Serial.printf("실패 rc=%d (%d회째, 3s 후 재시도) — 오프라인이어도 시리얼로 제어 가능\n",
+                    _mqtt.state(), _mqttFails);
+      recoverAfterRepeatedFailure();
     }
   }
 
 private:
+  // 연속 실패 복구: MQTT_FAILS_PER_WIFI_RESTART 번 실패마다 WiFi 를 끊고 다시 붙는다
+  // (lwIP/무선 상태 초기화). 그걸 WIFI_RESTARTS_BEFORE_REBOOT 번 해도 안 되면 재부팅.
+  // 호출 시점은 pumpBusy 가 아닐 때뿐이라 구동 중에 재부팅하지 않는다.
+  static const int MQTT_FAILS_PER_WIFI_RESTART = 8;    // ≈ 30 s
+  static const int WIFI_RESTARTS_BEFORE_REBOOT = 3;    // ≈ 2 min
+
+  void recoverAfterRepeatedFailure() {
+    if (_mqttFails < MQTT_FAILS_PER_WIFI_RESTART) return;
+    _mqttFails = 0;
+    _wifiRestarts++;
+    if (_wifiRestarts >= WIFI_RESTARTS_BEFORE_REBOOT) {
+      Serial.println("MQTT 복구 실패 — 재부팅");
+      Serial.flush();
+      ESP.restart();
+    }
+    Serial.printf("MQTT 연속 실패 — WiFi 재연결 (%d/%d)\n", _wifiRestarts, WIFI_RESTARTS_BEFORE_REBOOT);
+    _mqtt.disconnect();
+    WiFi.disconnect();
+    _lastWifiTryMs = millis();
+    startWifi();
+  }
+
   PumpConfig*    _cfg = nullptr;
   CommandHandler _onCommand = nullptr;
   WiFiClient     _net;
@@ -106,6 +135,7 @@ private:
   char           _brokerDesc[48] = "(미정)";
   unsigned long  _lastWifiTryMs = 0, _lastMqttTryMs = 0;
   bool           _wifiAnnounced = false;
+  int            _mqttFails = 0, _wifiRestarts = 0;
 
   static PumpNet* _self;
 
