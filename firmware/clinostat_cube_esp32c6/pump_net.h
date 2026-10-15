@@ -141,16 +141,16 @@ private:
       // 타임아웃을 짧게 — 이 호출은 블로킹이라 길게 잡으면 loop 가 그만큼 멈춘다.
       IPAddress found = MDNS.queryHost(_cfg->brokerHost, 600);
       if (found != IPAddress((uint32_t)0) && sameSubnet(found)) {
-        _mqtt.setServer(found, MQTT_PORT);
-        snprintf(_brokerDesc, sizeof(_brokerDesc), "%s (mDNS)", found.toString().c_str());
+        _mqtt.setServer(found, _cfg->brokerPort);
+        snprintf(_brokerDesc, sizeof(_brokerDesc), "%s:%d (mDNS)", found.toString().c_str(), _cfg->brokerPort);
         Serial.printf("브로커 = %s\n", _brokerDesc);
         return true;
       }
     }
     IPAddress fixed;
     if (strlen(_cfg->brokerIp) > 0 && fixed.fromString(_cfg->brokerIp)) {
-      _mqtt.setServer(fixed, MQTT_PORT);
-      snprintf(_brokerDesc, sizeof(_brokerDesc), "%s (고정)", fixed.toString().c_str());
+      _mqtt.setServer(fixed, _cfg->brokerPort);
+      snprintf(_brokerDesc, sizeof(_brokerDesc), "%s:%d (고정)", fixed.toString().c_str(), _cfg->brokerPort);
       Serial.printf("브로커 = %s\n", _brokerDesc);
       return true;
     }

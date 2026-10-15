@@ -95,6 +95,9 @@ struct PumpConfig {
   //     같은 SSID 인데 다른 /24 를 받는 환경에서 **시도조차 하지 않았다.** 검증하지 않는다.
   char brokerIp[16]   = "";
   char brokerHost[40] = "clinostat-pi";   // mDNS 호스트명 (".local" 제외)
+  // 2026-10-15: 현장 상위 방화벽이 1883 을 drop 한다(22·1884 등은 통과). 파이에서
+  // 1884→1883 중계를 띄우고 보드는 이 포트로 붙는다. `broker:<ip>:<port>` 로 바꾼다.
+  int  brokerPort     = MQTT_PORT;
 
   // NVS 키. 펌프 1 은 기존 키 그대로(배포된 보드의 설정 유지), 펌프 2 는 접미사 "2".
   // Preferences 키는 15자 제한 — "spinsteps2" 가 가장 길다(10자).
@@ -116,6 +119,7 @@ struct PumpConfig {
     pulseUs     = p.getInt ("pulseUs",   pulseUs);
     p.getString("brokerIp",   brokerIp,   sizeof(brokerIp));
     p.getString("brokerHost", brokerHost, sizeof(brokerHost));
+    brokerPort = p.getInt("brokerPort", brokerPort);
   }
 
   void saveDrive(Preferences& p, int idx) const {
@@ -137,6 +141,7 @@ struct PumpConfig {
   void saveBroker(Preferences& p) const {
     p.putString("brokerIp",   brokerIp);
     p.putString("brokerHost", brokerHost);
+    p.putInt   ("brokerPort", brokerPort);
   }
 
   long clampSpm(long v) const { return v < SPM_MIN ? SPM_MIN : (v > SPM_MAX ? SPM_MAX : v); }

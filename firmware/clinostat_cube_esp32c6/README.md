@@ -150,6 +150,20 @@ esptool --chip esp32c6 -p <PORT> write-flash 0x0 <백업파일>
 
 현재 소스로 되돌리는 건 저장소만으로 가능하다 — 위 "빌드 · 업로드" 절을 쓴다.
 
+## 현장 네트워크 (2026-10-15, 실기)
+
+- **보드를 파이 USB 에 꽂지 마라.** 브레드보드에서 MP1584 5V 가 XIAO 5V 핀(=USB VBUS)에
+  묶여 있어 Pi 4 가 저전압(`get_throttled`=0x50000)으로 재부팅을 반복했다. 플래시·시리얼
+  진단은 노트북 USB 에서, 무선 운전은 12V→MP1584 단독 급전으로 한다.
+- 같은 SSID(`qsolutions6402`)인데 보드와 파이가 **다른 /24** 를 받는다 → mDNS 실패.
+  상위 방화벽이 **1883 과 8000 을 drop** 하고 22·1884 등은 통과시킨다. 그래서 파이에
+  `1884→127.0.0.1:1883` TCP 중계(`mqtt_relay_1884.py`, 홈 디렉터리)를 두고 보드는
+  `broker:<파이 IP>:1884` 로 붙는다. 포트는 NVS 에 저장된다.
+- `write-flash 0x0 *.merged.bin` 은 NVS 까지 지운다. 전체 플래시 뒤에는 `broker:…` 와
+  바꾼 핀 설정을 다시 넣어야 한다.
+- 브링업 스크립트는 USB 없이도 돈다: `bringup_2pump.py --mqtt` (파이에서, 브로커
+  계정은 게이트웨이 `config.yaml` 의 `mqtt:` 절에서 읽는다).
+
 ## 로컬 브로커 (선택)
 
 노트북에서 Mosquitto 를 직접 띄울 때. `mosquitto_local.conf.example` 를 복사해

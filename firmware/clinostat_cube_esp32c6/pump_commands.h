@@ -20,7 +20,7 @@
  *   dir:fwd|rev       회전 방향.
  *   hold:on|off       코일 여자만 켜고 끄기 (EN 배선된 경우).
  *   pincheck:<gpio>   패드 무결성.
- *   broker:<ip> / brokerhost:<name>   브로커 주소. 재flash 없이 바꾼다.
+ *   broker:<ip>[:<port>] / brokerhost:<name>   브로커 주소. 재flash 없이 바꾼다.
  *   resetpos · wiring · status · help
  *
  * 2026-10-15 — 펌프 2대. 모터 명령은 **대상 펌프 접두어** `p1:` / `p2:` 를 받는다.
@@ -228,9 +228,16 @@ inline void handleCommandFor(int idx, const String& raw) {
   // ---- 확장 : 브로커 주소 (재flash 없이, 보드 공통) ----
   else if (c.startsWith("broker:")) {
     String v = cmdArg(c, 7);
+    int colon = v.indexOf(':');
+    if (colon >= 0) {
+      int port = v.substring(colon + 1).toInt();
+      if (port < 1 || port > 65535) { gReply("err broker 포트는 1~65535"); return; }
+      gCfg.brokerPort = port;
+      v = v.substring(0, colon);
+    }
     v.toCharArray(gCfg.brokerIp, sizeof(gCfg.brokerIp));
     gCfg.saveBroker(gPrefs);
-    gReply("ok broker " + String(gCfg.brokerIp) + " (다음 재접속부터)");
+    gReply("ok broker " + String(gCfg.brokerIp) + ":" + String(gCfg.brokerPort) + " (다음 재접속부터)");
   }
   else if (c.startsWith("brokerhost:")) {
     String v = cmdArg(c, 11);
@@ -246,7 +253,7 @@ inline void handleCommandFor(int idx, const String& raw) {
     gReply("cmd: [p1:|p2:]start stop once manualstep:N spm:N spinsteps:N spinspm:N  stopall  led:on|off");
     gReply("     [p1:|p2:]hz:<hz>[:<sec>] sweep[:hz[:ms]] dir:fwd|rev hold:on|off resetpos");
     gReply("     [p1:|p2:]pin:step|dir|en:<gpio> pinD:step|dir|en:<D> enpol:low|high pulse:<us>");
-    gReply("     pincheck:<gpio> broker:<ip> brokerhost:<name> wiring status help");
+    gReply("     pincheck:<gpio> broker:<ip>[:<port>] brokerhost:<name> wiring status help");
     gReply("     접두어 없음 = 펌프 1. MQTT 는 토픽이 대상을 정한다 (…/board1/p2/cmd = 펌프 2).");
   }
   else {
