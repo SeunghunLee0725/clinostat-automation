@@ -225,6 +225,9 @@ class StrategyPreflightConfig(BaseModel):
 TARGET_ERROR_BIAS_G_BY_STRATEGY = {
     "directional_scheduled_taspg_moon": 0.01736620424279889,
     "directional_scheduled_taspg_mars": 0.09221670851048541,
+    # 센서 흔들림 평가용 별칭 — 원본 프리셋과 같은 바이어스를 쓴다
+    "sensor_moon_taspg": 0.01736620424279889,
+    "sensor_mars_taspg": 0.09221670851048541,
 }
 
 MICROGRAVITY_STRATEGIES = {

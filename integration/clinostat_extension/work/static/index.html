@@ -1828,6 +1828,8 @@ window.addEventListener('resize', scheduleCameraResize);
 #spacebioPanel .sb-danger-zone .sb-sec-title { color: var(--accent); }
 #spacebioPanel .sb-danger-zone code { font-size: 11px; word-break: break-all;
   background: rgba(0,0,0,.25); padding: 1px 4px; border-radius: 4px; }
+/* 펌프 카드 묶음은 그리드 셀을 차지하지 않는다 — 카드 하나하나가 셀이 된다. */
+#spacebioPanel #pumpCards { display: contents; }
 </style>
 
 <div id="spacebioPanel">
@@ -1890,65 +1892,80 @@ window.addEventListener('resize', scheduleCameraResize);
       <div class="sb-err" id="spacebioGatewayError"></div>
     </div>
 
-    <div class="sb-card">
-      <h3>펌프 <span class="sb-badge" id="pumpSimulatedBadge">-</span></h3>
+    <!-- 펌프 카드는 status.pumps 수만큼 템플릿에서 만든다 — 보드 하나(ESP32-C6)가
+         DRV8825 둘을 몰아 펌프가 둘이다(2026-10-15). 카드 안 요소는 id 대신 data-f 로
+         찾는다(id 는 문서에서 유일해야 하므로 복제할 수 없다). 복제할 때 번호를 붙인
+         id 를 만들어 label↔input 연결은 살린다. -->
+    <div id="pumpCards"></div>
+    <template id="pumpCardTemplate">
+      <div class="sb-card sb-pump" data-pump="">
+        <h3>펌프 <span data-f="pumpTitle"></span> <span class="sb-badge" data-f="pumpSimulatedBadge">-</span></h3>
 
-      <!-- 지금 상태를 먼저 보여준다. 조작 전에 확인해야 할 것들이다. -->
-      <!-- 카드 폭이 좁고 상태행은 2열로 깔린다 — 라벨을 짧게 둬야 줄바꿈되지 않는다.
-           값만 봐도 뜻이 통하는 것(보정 "0.5 µL/step")은 단위를 라벨에서 뺐다. -->
-      <div class="sb-readouts">
-        <div class="sb-row"><span>상태</span><span id="pumpState">idle</span></div>
-        <div class="sb-row"><span>위치</span><span id="pumpPositionSteps">-</span></div>
-        <div class="sb-row"><span>보정</span><span id="pumpCalibration">-</span></div>
-        <div class="sb-row"><span>래치</span><span id="pumpEstopLatched">해제됨</span></div>
-      </div>
-      <div class="sb-hint" id="pumpModeHint"></div>
-
-      <!-- ① 보정이 먼저다. 이 값이 있어야 ②가 열린다. -->
-      <div class="sb-sec" id="pumpCalibrationSection">
-        <div class="sb-sec-title">① µL 보정</div>
-        <label for="pumpUlPerStep">스텝당 토출량 (µL/step)</label>
-        <input id="pumpUlPerStep" type="number" value="0.5" step="0.001" min="0.001" max="1000">
-        <div class="sb-actions">
-          <button id="pumpApplyCalibration">보정 적용</button>
-        </div>
-      </div>
-
-      <div class="sb-sec" id="pumpVolumeSection">
-        <div class="sb-sec-title">② 부피 주입</div>
-        <div class="sb-fields">
-          <label for="pumpRate">유량 (µL/s)</label>
-          <label for="pumpTargetVolume">목표량 (µL)</label>
-          <input id="pumpRate" type="number" value="50" step="0.1" min="1" max="200">
-          <input id="pumpTargetVolume" type="number" value="120" step="0.1" min="1" max="1000">
-        </div>
+        <!-- 지금 상태를 먼저 보여준다. 조작 전에 확인해야 할 것들이다. -->
+        <!-- 카드 폭이 좁고 상태행은 2열로 깔린다 — 라벨을 짧게 둬야 줄바꿈되지 않는다.
+             값만 봐도 뜻이 통하는 것(보정 "0.5 µL/step")은 단위를 라벨에서 뺐다. -->
         <div class="sb-readouts">
-          <div class="sb-row"><span>전달량</span><span id="pumpDeliveredVolume">0.0</span></div>
-          <div class="sb-row"><span>세션 누적</span><span id="pumpCumulativeVolume">0.0</span></div>
+          <div class="sb-row"><span>상태</span><span data-f="pumpState">idle</span></div>
+          <div class="sb-row"><span>위치</span><span data-f="pumpPositionSteps">-</span></div>
+          <div class="sb-row"><span>보정</span><span data-f="pumpCalibration">-</span></div>
+          <div class="sb-row"><span>래치</span><span data-f="pumpEstopLatched">해제됨</span></div>
         </div>
-        <div class="sb-actions">
-          <button id="pumpDispense">주입</button>
-          <button id="pumpStop">정지</button>
+        <div class="sb-hint" data-f="pumpModeHint"></div>
+
+        <!-- ① 보정이 먼저다. 이 값이 있어야 ②가 열린다. -->
+        <div class="sb-sec" data-f="pumpCalibrationSection">
+          <div class="sb-sec-title">① µL 보정</div>
+          <label data-for="pumpUlPerStep">스텝당 토출량 (µL/step)</label>
+          <input data-f="pumpUlPerStep" type="number" value="0.5" step="0.001" min="0.001" max="1000">
+          <div class="sb-actions">
+            <button data-f="pumpApplyCalibration">보정 적용</button>
+          </div>
+        </div>
+
+        <div class="sb-sec" data-f="pumpVolumeSection">
+          <div class="sb-sec-title">② 부피 주입</div>
+          <div class="sb-fields">
+            <label data-for="pumpRate">유량 (µL/s)</label>
+            <label data-for="pumpTargetVolume">목표량 (µL)</label>
+            <input data-f="pumpRate" type="number" value="50" step="0.1" min="1" max="200">
+            <input data-f="pumpTargetVolume" type="number" value="120" step="0.1" min="1" max="1000">
+          </div>
+          <div class="sb-readouts">
+            <div class="sb-row"><span>전달량</span><span data-f="pumpDeliveredVolume">0.0</span></div>
+            <div class="sb-row"><span>세션 누적</span><span data-f="pumpCumulativeVolume">0.0</span></div>
+          </div>
+          <div class="sb-actions">
+            <button data-f="pumpDispense">주입</button>
+            <button data-f="pumpStop">정지</button>
+          </div>
+        </div>
+
+        <div class="sb-sec" data-f="pumpStepSection">
+          <div class="sb-sec-title">③ 스텝 구동</div>
+          <div class="sb-fields">
+            <label data-for="pumpStepCount">스텝 수</label>
+            <label data-for="pumpStepSpm">속도 (spm)</label>
+            <input data-f="pumpStepCount" type="number" value="200" step="1" min="1">
+            <input data-f="pumpStepSpm" type="number" value="1200" step="1" min="1" max="2400">
+          </div>
+          <div class="sb-actions">
+            <button data-f="pumpSendSteps">스텝 전송</button>
+          </div>
         </div>
       </div>
+    </template>
 
-      <div class="sb-sec" id="pumpStepSection">
-        <div class="sb-sec-title">③ 스텝 구동</div>
-        <div class="sb-fields">
-          <label for="pumpStepCount">스텝 수</label>
-          <label for="pumpStepSpm">속도 (spm)</label>
-          <input id="pumpStepCount" type="number" value="200" step="1" min="1">
-          <input id="pumpStepSpm" type="number" value="1200" step="1" min="1" max="2400">
-        </div>
-        <div class="sb-actions">
-          <button id="pumpSendSteps">스텝 전송</button>
-        </div>
+    <!-- 비상정지는 펌프별이 아니라 **전체**다. 실수로 누르면 대가가 크고, 해제에는
+         확인 문구가 필요해 흐름 자체가 다르므로 일반 조작 카드와 갈라 놓는다.
+         본문에 pump_id 를 넣지 않으면 게이트웨이가 모든 펌프에 적용한다. -->
+    <div class="sb-card">
+      <h3>펌프 비상정지</h3>
+      <div class="sb-readouts">
+        <div class="sb-row"><span>래치</span><span id="pumpEstopSummary">해제됨</span></div>
       </div>
-
-      <!-- 비상정지는 일반 조작과 갈라 놓는다. 실수로 누르면 대가가 크고,
-           해제에는 확인 문구가 필요해 흐름 자체가 다르다. -->
       <div class="sb-danger-zone">
-        <div class="sb-sec-title">⚠ 비상정지</div>
+        <div class="sb-sec-title">⚠ 비상정지 — 모든 펌프</div>
+        <div class="sb-hint">모든 펌프를 함께 멈추고 래치합니다. 해제도 함께 풀립니다.</div>
         <div class="sb-actions">
           <button id="pumpEmergencyStop" class="sb-danger">비상 정지</button>
         </div>
@@ -1999,9 +2016,9 @@ let spacebioSensorState = 'idle';
 // 펌프 백엔드마다 쓸 수 있는 명령이 다르다. 무선 실기 펌프는 µL 보정이 없어
 // 부피 주입을 못 하고, 모의 펌프에는 스텝 개념이 없다. 눌러도 409 가 나는
 // 버튼을 열어두면 고장으로 오해하므로, 모드를 기억해 못 쓰는 쪽을 잠근다.
-let spacebioPumpMode = null;
-// 적용 중인 µL 보정. null 이면 부피 주입을 쓸 수 없다 (서버가 status로 알려준다).
-let spacebioPumpUlPerStep = null;
+// 펌프가 둘이라 번호별로 둔다: pump_id → { mode, ulPerStep }.
+//   ulPerStep 은 적용 중인 µL 보정. null 이면 부피 주입을 쓸 수 없다 (서버가 status로 알려준다).
+const spacebioPumps = {};
 //: 마지막으로 차트에 찍은 보드 타임스탬프. 같은 샘플을 두 번 찍지 않기 위한 것.
 let spacebioLastPlottedTs = null;
 let spacebioLastRender = 0;
@@ -2104,34 +2121,120 @@ function spacebioSyncActionButtons() {
   spacebioSyncPumpControls();
 }
 
+// ── 펌프 카드 ────────────────────────────────────────────────────────
+// 카드는 status.pumps 수만큼 템플릿에서 만든다. 카드 안 요소는 data-f 로 찾는다.
+const sbPumpCard = (pid) => document.querySelector('#pumpCards [data-pump="' + pid + '"]');
+const sbPumpEl = (pid, name) => {
+  const card = sbPumpCard(pid);
+  return card ? card.querySelector('[data-f="' + name + '"]') : null;
+};
+
+// 펌프 수가 바뀌었을 때만 다시 만든다 — 매 상태마다 다시 그리면 입력 중인 값이 날아간다.
+function spacebioEnsurePumpCards(pumps) {
+  const host = sbEl('pumpCards');
+  const wanted = pumps.map((p) => String(p.pump_id || 1));
+  const have = Array.from(host.children).map((card) => card.dataset.pump);
+  if (wanted.join() === have.join()) return;
+  host.textContent = '';
+  wanted.forEach((pid) => host.appendChild(spacebioBuildPumpCard(pid)));
+}
+
+function spacebioBuildPumpCard(pid) {
+  const card = sbEl('pumpCardTemplate').content.firstElementChild.cloneNode(true);
+  card.dataset.pump = pid;
+  // id 는 문서에서 유일해야 한다 — 번호를 붙여 label↔input 연결을 살린다.
+  card.querySelectorAll('[data-f]').forEach((el) => { el.id = el.dataset.f + '-' + pid; });
+  card.querySelectorAll('[data-for]').forEach((el) => { el.htmlFor = el.dataset.for + '-' + pid; });
+  const f = (name) => card.querySelector('[data-f="' + name + '"]');
+  const pumpId = Number(pid);
+  f('pumpTitle').textContent = pid;
+  f('pumpApplyCalibration').onclick = async () => {
+    const data = await spacebioFetch('/api/spacebio/pump/calibration', { method: 'POST',
+      body: { pump_id: pumpId, ul_per_step: Number(f('pumpUlPerStep').value) } });
+    spacebioPumps[pid] = { ...(spacebioPumps[pid] || {}), ulPerStep: data.ul_per_step };
+    spacebioSyncPumpControls();
+    spacebioLog('펌프 ' + pid + ' µL 보정 적용 — ' + data.ul_per_step + ' µL/step');
+  };
+  f('pumpDispense').onclick = async () => {
+    await spacebioFetch('/api/spacebio/pump/dispense', { method: 'POST', body: {
+      pump_id: pumpId,
+      rate_ul_s: Number(f('pumpRate').value),
+      target_volume_ul: Number(f('pumpTargetVolume').value) } });
+    spacebioLog('펌프 ' + pid + ' 주입 시작');
+  };
+  // 카드의 정지는 그 펌프만. 전체 정지는 비상정지 카드와 STOP ALL 이 맡는다.
+  f('pumpStop').onclick = () =>
+    spacebioFetch('/api/spacebio/pump/stop', { method: 'POST', body: { pump_id: pumpId } });
+  f('pumpSendSteps').onclick = async () => {
+    await spacebioFetch('/api/spacebio/pump/step', { method: 'POST', body: {
+      pump_id: pumpId,
+      steps: Number(f('pumpStepCount').value),
+      spm: Number(f('pumpStepSpm').value) } });
+    spacebioLog('펌프 ' + pid + ' 스텝 전송');
+  };
+  return card;
+}
+
 // 백엔드가 지원하지 않는 명령은 애초에 누를 수 없게 한다.
 //   무선(실기) — 스텝은 항상. 부피는 µL 보정이 들어와야 열린다.
 //   모의       — 부피만. 스텝 개념 자체가 없다.
 // 모드를 모르는 동안(첫 응답 전)에는 아무것도 잠그지 않는다.
 function spacebioSyncPumpControls() {
-  const mode = spacebioPumpMode;
-  if (!mode) return;
-  const wireless = mode === 'WIRELESS';
-  // 무선에서 부피 주입은 보정이 있어야 근거가 생긴다. 없으면 잠근다.
-  const volumeReady = wireless ? spacebioPumpUlPerStep != null : true;
-  ['pumpRate', 'pumpTargetVolume', 'pumpDispense'].forEach((id) => {
-    sbEl(id).disabled = !volumeReady;
+  Object.keys(spacebioPumps).forEach((pid) => {
+    const info = spacebioPumps[pid];
+    const f = (name) => sbPumpEl(pid, name);
+    if (!info.mode || !f('pumpState')) return;
+    const wireless = info.mode === 'WIRELESS';
+    // 무선에서 부피 주입은 보정이 있어야 근거가 생긴다. 없으면 잠근다.
+    const volumeReady = wireless ? info.ulPerStep != null : true;
+    ['pumpRate', 'pumpTargetVolume', 'pumpDispense'].forEach((name) => {
+      f(name).disabled = !volumeReady;
+    });
+    ['pumpStepCount', 'pumpStepSpm', 'pumpSendSteps'].forEach((name) => {
+      f(name).disabled = !wireless;
+    });
+    ['pumpUlPerStep', 'pumpApplyCalibration'].forEach((name) => {
+      f(name).disabled = !wireless;      // 보정은 스텝으로 도는 펌프에만 의미가 있다
+    });
+    // 버튼 하나만 흐린 것보다 구획째 흐린 편이 "왜 못 쓰는지"가 분명하다.
+    f('pumpCalibrationSection').classList.toggle('is-off', !wireless);
+    f('pumpVolumeSection').classList.toggle('is-off', !volumeReady);
+    f('pumpStepSection').classList.toggle('is-off', !wireless);
+    f('pumpModeHint').textContent = !wireless
+      ? '모의 펌프 — 스텝 개념이 없습니다. 부피 주입을 쓰세요.'
+      : volumeReady
+        ? '무선 실기 펌프 — 부피 주입은 아래 보정값으로 스텝으로 환산해 보냅니다.'
+        : '무선 실기 펌프 — 스텝당 토출량을 넣고 [보정 적용]을 누르면 부피 주입이 열립니다.';
   });
-  ['pumpStepCount', 'pumpStepSpm', 'pumpSendSteps'].forEach((id) => {
-    sbEl(id).disabled = !wireless;
-  });
-  ['pumpUlPerStep', 'pumpApplyCalibration'].forEach((id) => {
-    sbEl(id).disabled = !wireless;      // 보정은 스텝으로 도는 펌프에만 의미가 있다
-  });
-  // 버튼 하나만 흐린 것보다 구획째 흐린 편이 "왜 못 쓰는지"가 분명하다.
-  sbEl('pumpCalibrationSection').classList.toggle('is-off', !wireless);
-  sbEl('pumpVolumeSection').classList.toggle('is-off', !volumeReady);
-  sbEl('pumpStepSection').classList.toggle('is-off', !wireless);
-  sbEl('pumpModeHint').textContent = !wireless
-    ? '모의 펌프 — 스텝 개념이 없습니다. 부피 주입을 쓰세요.'
-    : volumeReady
-      ? '무선 실기 펌프 — 부피 주입은 아래 보정값으로 스텝으로 환산해 보냅니다.'
-      : '무선 실기 펌프 — 스텝당 토출량을 넣고 [보정 적용]을 누르면 부피 주입이 열립니다.';
+}
+
+// 펌프 카드 하나를 status.pumps 의 항목으로 채운다.
+function spacebioRenderPump(pump) {
+  const pid = String(pump.pump_id || 1);
+  const f = (name) => sbPumpEl(pid, name);
+  if (!f('pumpState')) return;
+  f('pumpState').textContent = pump.state;
+  // 배지는 실제 백엔드 모드를 반영한다 (하드코딩된 SIMULATED가 아니라).
+  const info = spacebioPumps[pid] || (spacebioPumps[pid] = {});
+  if (pump.mode) {
+    const badge = f('pumpSimulatedBadge');
+    badge.textContent = pump.mode === 'WIRELESS' ? '무선 실측' : '모의';
+    badge.classList.toggle('sb-live', pump.mode === 'WIRELESS');
+    info.mode = pump.mode;
+  }
+  if (pump.ul_per_step !== undefined) {
+    info.ulPerStep = pump.ul_per_step;
+    f('pumpCalibration').textContent = pump.ul_per_step == null
+      ? '없음 — 부피 주입 불가' : pump.ul_per_step + ' µL/step';
+  }
+  const latched = f('pumpEstopLatched');
+  latched.textContent = pump.estop_latched ? '래치됨 — 해제 필요' : '해제됨';
+  latched.classList.toggle('sb-latched', !!pump.estop_latched);
+  f('pumpDeliveredVolume').textContent = (pump.delivered_volume_ul || 0).toFixed(1);
+  f('pumpCumulativeVolume').textContent = (pump.session_cumulative_volume_ul || 0).toFixed(1);
+  if (pump.position_steps !== undefined && pump.position_steps !== null) {
+    f('pumpPositionSteps').textContent = pump.position_steps;
+  }
 }
 
 // 세션은 측정 시작/정지가 알아서 연다. 운영자가 따로 누를 버튼은 없다.
@@ -2175,7 +2278,7 @@ async function spacebioResetEstop() {
                       { method: 'POST', body: { acknowledgement: typed } });
   field.value = '';
   spacebioSyncResetButton();
-  spacebioLog('비상정지 해제됨');
+  spacebioLog('비상정지 해제됨 — 모든 펌프');
 }
 
 async function spacebioConfigureSensor() {
@@ -2239,29 +2342,18 @@ function spacebioRenderStatus(status) {
   sbEl('spacebioSessionElapsed').textContent = spacebioSessionStartedAt
     ? Math.round((Date.now() - spacebioSessionStartedAt) / 1000) + ' s' : '-';
 
-  const pump = status.pump || {};
-  sbEl('pumpState').textContent = pump.state;
-  // 배지는 실제 백엔드 모드를 반영한다 (하드코딩된 SIMULATED가 아니라).
-  const pumpBadge = sbEl('pumpSimulatedBadge');
-  if (pump.mode) {
-    pumpBadge.textContent = pump.mode === 'WIRELESS' ? '무선 실측' : '모의';
-    pumpBadge.classList.toggle('sb-live', pump.mode === 'WIRELESS');
-    spacebioPumpMode = pump.mode;
-  }
-  if (pump.ul_per_step !== undefined) {
-    spacebioPumpUlPerStep = pump.ul_per_step;
-    sbEl('pumpCalibration').textContent = pump.ul_per_step == null
-      ? '없음 — 부피 주입 불가' : pump.ul_per_step + ' µL/step';
-  }
+  // 펌프는 status.pumps(전부). 구 게이트웨이는 pump 하나만 주므로 그것으로 대신한다.
+  const pumps = (status.pumps && status.pumps.length) ? status.pumps : [status.pump || {}];
+  const staleBefore = sbEl('spacebioPanel').classList.contains('sb-stale');
+  spacebioEnsurePumpCards(pumps);
+  pumps.forEach(spacebioRenderPump);
   spacebioSyncPumpControls();   // 모드·보정에 맞춰 못 쓰는 컨트롤을 잠근다
-  const latched = sbEl('pumpEstopLatched');
-  latched.textContent = pump.estop_latched ? '래치됨 — 해제 필요' : '해제됨';
-  latched.classList.toggle('sb-latched', !!pump.estop_latched);
-  sbEl('pumpDeliveredVolume').textContent = (pump.delivered_volume_ul || 0).toFixed(1);
-  sbEl('pumpCumulativeVolume').textContent = (pump.session_cumulative_volume_ul || 0).toFixed(1);
-  if (pump.position_steps !== undefined && pump.position_steps !== null) {
-    sbEl('pumpPositionSteps').textContent = pump.position_steps;
-  }
+  if (staleBefore) spacebioSetStale(true);   // 새로 만든 카드도 stale 잠금을 따른다
+  // 비상정지 카드는 전체를 요약한다 — 어느 하나라도 래치면 해제가 필요하다.
+  const anyLatched = pumps.some((p) => !!p.estop_latched);
+  const summary = sbEl('pumpEstopSummary');
+  summary.textContent = anyLatched ? '래치됨 — 해제 필요' : '해제됨';
+  summary.classList.toggle('sb-latched', anyLatched);
 
   const sensor = status.sensor || {};
   // 센서 배지도 실제 모드를 반영한다.
@@ -2285,11 +2377,69 @@ function spacebioRenderStatus(status) {
   }
 }
 
+// ── 저항 그래프 x축: 기본 120 s 창 + 마우스 드래그 이동 (2026-09-05) ──
+// 세션 시작부터 전부 그리면 시간이 갈수록 최근 변화가 안 보인다. 최신 120 s 만
+// 보여 주고, 드래그하면 그 구간에 머문다(자동 추종 해제). 더블클릭으로 복귀.
+const SPACEBIO_WINDOW_S = 120;
+let spacebioChartFollow = true;      // true = 최신 구간 자동 추종
+let spacebioChartWindow = null;      // 사용자가 이동한 구간 {min, max}
+
+function spacebioApplyChartWindow() {
+  if (!spacebioChart) return;
+  const pts = spacebioChart.data.datasets[0].data;
+  const x = spacebioChart.options.scales.x;
+  if (spacebioChartFollow) {
+    const last = pts.length ? pts[pts.length - 1].x : 0;
+    x.min = Math.max(0, last - SPACEBIO_WINDOW_S);
+    x.max = Math.max(SPACEBIO_WINDOW_S, last);
+  } else if (spacebioChartWindow) {
+    x.min = spacebioChartWindow.min;
+    x.max = spacebioChartWindow.max;
+  }
+}
+
+function spacebioSetupChartPan() {
+  const canvas = sbEl('resistanceChart');
+  if (!canvas || !spacebioChart) return;
+  let dragging = false, startPx = 0, startMin = 0, startMax = 0;
+
+  canvas.style.cursor = 'grab';
+  canvas.addEventListener('mousedown', (ev) => {
+    const x = spacebioChart.options.scales.x;
+    if (x.min == null || x.max == null) return;
+    dragging = true; startPx = ev.clientX; startMin = x.min; startMax = x.max;
+    spacebioChartFollow = false;
+    canvas.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', (ev) => {
+    if (!dragging) return;
+    const area = spacebioChart.chartArea;
+    if (!area) return;
+    const span = startMax - startMin;
+    // 화면에서 끈 픽셀을 초로 환산한다. 오른쪽으로 끌면 과거로 간다.
+    const perPx = span / Math.max(1, area.right - area.left);
+    const shift = (ev.clientX - startPx) * perPx;
+    spacebioChartWindow = { min: startMin - shift, max: startMax - shift };
+    spacebioApplyChartWindow();
+    spacebioChart.update('none');
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false; canvas.style.cursor = 'grab';
+  });
+  // 더블클릭 = 최신 구간으로 복귀
+  canvas.addEventListener('dblclick', () => {
+    spacebioChartFollow = true; spacebioChartWindow = null;
+    spacebioApplyChartWindow(); spacebioChart.update('none');
+  });
+  canvas.title = '드래그: 시간 이동 · 더블클릭: 최신 120 s 로 복귀';
+}
+
 function spacebioResetChart() {
   if (!spacebioChart) return;
-  spacebioChart.data.labels.length = 0;
   spacebioChart.data.datasets[0].data.length = 0;
   spacebioLastPlottedTs = null;
+  spacebioChartFollow = true;
   spacebioChart.update('none');
 }
 
@@ -2304,13 +2454,10 @@ function spacebioPushPoint(sample) {
   spacebioLastPlottedTs = sample.source_timestamp_ms;
 
   const now = Date.now();
-  const data = spacebioChart.data;
-  data.labels.push((sample.session_elapsed_ms / 1000).toFixed(1));
-  data.datasets[0].data.push(sample.resistance_ohm);
-  while (data.labels.length > SPACEBIO_MAX_POINTS) {
-    data.labels.shift();
-    data.datasets[0].data.shift();
-  }
+  const points = spacebioChart.data.datasets[0].data;
+  points.push({ x: sample.session_elapsed_ms / 1000, y: sample.resistance_ohm });
+  while (points.length > SPACEBIO_MAX_POINTS) points.shift();
+  spacebioApplyChartWindow();
   if (now - spacebioLastRender < SPACEBIO_RENDER_MS) return;
   spacebioLastRender = now;
   spacebioChart.update('none');
@@ -2347,12 +2494,14 @@ function spacebioConnect() {
 async function spacebioInit() {
   spacebioChart = new Chart(sbEl('resistanceChart'), {
     type: 'line',
-    data: { labels: [], datasets: [{ label: '저항 (Ω)', data: [], borderColor: '#4cc9f0',
-      borderWidth: 1.5, pointRadius: 0, tension: .2 }] },
+    data: { datasets: [{ label: '저항 (Ω)', data: [], borderColor: '#4cc9f0',
+      borderWidth: 1.5, pointRadius: 0, tension: .2, parsing: false }] },
     options: { animation: false, responsive: true, maintainAspectRatio: false,
-      scales: { x: { title: { display: true, text: '세션 경과 (s)' } },
+      scales: { x: { type: 'linear', title: { display: true, text: '세션 경과 (s)' },
+                     ticks: { callback: (v) => Number(v).toFixed(0) } },
                 y: { title: { display: true, text: '저항 (Ω)' } } } },
   });
+  spacebioSetupChartPan();
 
   // 안내 문구는 상수에서 채운다 — 마크업에 박아두면 상수와 어긋날 수 있다.
   sbEl('pumpResetAckHint').textContent = SPACEBIO_ESTOP_ACK;
@@ -2379,30 +2528,11 @@ async function spacebioInit() {
     const finished = await spacebioFinishSession();
     spacebioLog(finished ? '측정 정지 — 기록 저장 완료 (' + finished + ')' : '측정 정지');
   };
-  sbEl('pumpApplyCalibration').onclick = async () => {
-    const data = await spacebioFetch('/api/spacebio/pump/calibration', {
-      method: 'POST', body: { ul_per_step: Number(sbEl('pumpUlPerStep').value) } });
-    spacebioPumpUlPerStep = data.ul_per_step;
-    spacebioSyncPumpControls();
-    spacebioLog('µL 보정 적용 — ' + data.ul_per_step + ' µL/step');
-  };
-  sbEl('pumpDispense').onclick = async () => {
-    await spacebioFetch('/api/spacebio/pump/dispense', { method: 'POST', body: {
-      rate_ul_s: Number(sbEl('pumpRate').value),
-      target_volume_ul: Number(sbEl('pumpTargetVolume').value) } });
-    spacebioLog('주입 시작');
-  };
-  sbEl('pumpStop').onclick = () =>
-    spacebioFetch('/api/spacebio/pump/stop', { method: 'POST', body: {} });
-  sbEl('pumpSendSteps').onclick = async () => {
-    await spacebioFetch('/api/spacebio/pump/step', { method: 'POST', body: {
-      steps: Number(sbEl('pumpStepCount').value),
-      spm: Number(sbEl('pumpStepSpm').value) } });
-    spacebioLog('스텝 전송');
-  };
+  // 펌프 카드의 핸들러는 카드를 만들 때 붙는다(spacebioBuildPumpCard).
+  // 비상정지는 본문에 pump_id 를 넣지 않는다 → 게이트웨이가 모든 펌프에 적용한다.
   sbEl('pumpEmergencyStop').onclick = async () => {
     await spacebioFetch('/api/spacebio/pump/emergency-stop', { method: 'POST', body: {} });
-    spacebioLog('비상 정지 — 래치됨');
+    spacebioLog('비상 정지 — 모든 펌프 래치됨');
   };
   sbEl('pumpResetEmergencyStop').onclick = spacebioResetEstop;
 

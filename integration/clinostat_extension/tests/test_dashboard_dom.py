@@ -81,26 +81,70 @@ NEW_IDS = [
     "resistanceStart", "resistanceStop",
     "resistanceValue", "resistanceDelta", "resistanceAdc",
     "resistanceTemperature", "resistanceBattery", "resistanceChart",
-    "pumpSimulatedBadge", "pumpState", "pumpEstopLatched",
-    "pumpRate", "pumpTargetVolume", "pumpDeliveredVolume",
-    "pumpCumulativeVolume", "pumpDispense", "pumpStop",
+    # 비상정지는 펌프 전체에 걸리므로 카드 밖의 고정 요소다.
     "pumpEmergencyStop", "pumpResetAcknowledgement", "pumpResetEmergencyStop",
-    "pumpStepCount", "pumpStepSpm", "pumpSendSteps", "pumpPositionSteps",
+    "pumpEstopSummary", "pumpCards", "pumpCardTemplate",
     "spacebioJumpLink", "resistanceModeBadge", "spacebioSubtitle",
     "spacebioRecordingHint", "spacebioDataPath", "spacebioStorageHint",
     "resistanceRref", "resistanceAvgFactor", "resistanceSettingHint",
 ]
 
 
+# 펌프 카드는 템플릿에서 펌프 수만큼 복제된다(보드 하나가 펌프 둘을 몬다, 2026-10-15).
+# id 는 문서에서 유일해야 하므로 카드 안 요소는 data-f 로 찾는다 — 템플릿에 정확히 한 번.
+PUMP_CARD_FIELDS = [
+    "pumpTitle", "pumpSimulatedBadge", "pumpState", "pumpPositionSteps", "pumpCalibration",
+    "pumpEstopLatched", "pumpModeHint", "pumpCalibrationSection", "pumpUlPerStep",
+    "pumpApplyCalibration", "pumpVolumeSection", "pumpRate", "pumpTargetVolume",
+    "pumpDeliveredVolume", "pumpCumulativeVolume", "pumpDispense", "pumpStop",
+    "pumpStepSection", "pumpStepCount", "pumpStepSpm", "pumpSendSteps",
+]
+
+
+def _pump_template(work: str) -> str:
+    start = work.index('<template id="pumpCardTemplate">') + len('<template id="pumpCardTemplate">')
+    return work[start:work.index("</template>", start)]
+
+
+@pytest.mark.parametrize("field", PUMP_CARD_FIELDS)
+def test_pump_card_template_has_each_field_once(work, field):
+    assert _pump_template(work).count(f'data-f="{field}"') == 1, f"{field} 가 템플릿에 없거나 중복이다"
+
+
+def test_pump_card_template_has_no_ids(work):
+    """복제되는 템플릿에 id 가 있으면 두 번째 카드부터 문서 안에서 중복된다."""
+    assert 'id="' not in _pump_template(work)
+
+
+def test_pump_card_commands_carry_pump_id(work):
+    build = work[work.index("function spacebioBuildPumpCard"):]
+    build = build[:build.index("\nfunction ", 1)]
+    for path in ("/api/spacebio/pump/calibration", "/api/spacebio/pump/dispense",
+                 "/api/spacebio/pump/stop", "/api/spacebio/pump/step"):
+        assert path in build, f"{path} 가 카드 핸들러에 없다"
+    assert build.count("pump_id: pumpId") == 4
+
+
+def test_emergency_stop_targets_every_pump(work):
+    """비상정지·해제 본문에 pump_id 가 없어야 게이트웨이가 모든 펌프에 적용한다."""
+    estop = work[work.index("sbEl('pumpEmergencyStop').onclick"):][:300]
+    assert "/api/spacebio/pump/emergency-stop" in estop and "pump_id" not in estop
+    reset = work[work.index("async function spacebioResetEstop"):][:600]
+    assert "pump_id" not in reset
+
+
 def test_badges_reflect_actual_mode_not_hardcoded_simulated(work):
     """배지는 status의 실제 mode로 채워야 한다 — SIMULATED 하드코딩 금지."""
     # 배지 요소에 정적 'SIMULATED' 텍스트가 남아 있으면 안 된다
-    assert 'id="pumpSimulatedBadge">SIMULATED<' not in work
+    assert 'data-f="pumpSimulatedBadge">SIMULATED<' not in work
     assert 'id="resistanceModeBadge">-<' in work or 'id="resistanceModeBadge">' in work
-    # 렌더가 mode로 배지를 채운다
+    # 렌더가 mode로 배지를 채운다 — 펌프는 카드별 렌더 함수가 맡는다
+    pump_render = work[work.index("function spacebioRenderPump"):]
+    pump_render = pump_render[:pump_render.index("\nfunction ", 1)]
+    assert "pumpSimulatedBadge" in pump_render and "WIRELESS" in pump_render
     render = work[work.index("function spacebioRenderStatus"):]
     render = render[:render.index("\nfunction ", 1)]
-    assert "pumpSimulatedBadge" in render and "WIRELESS" in render
+    assert "spacebioRenderPump" in render and "status.pumps" in render
     assert "resistanceModeBadge" in render and "BLE_LIVE" in render
 
 
@@ -241,7 +285,7 @@ def test_configure_always_sends_ble_live(work):
 def test_pump_step_controls_send_steps_and_spm(work):
     assert "/api/spacebio/pump/step" in work
     assert "pumpStepCount" in work and "pumpStepSpm" in work
-    section = work[work.index("sbEl('pumpSendSteps')"):][:400]
+    section = work[work.index("f('pumpSendSteps')"):][:400]
     assert "steps" in section and "spm" in section
 
 
