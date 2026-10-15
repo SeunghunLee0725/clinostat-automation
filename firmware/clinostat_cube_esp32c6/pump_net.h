@@ -12,6 +12,9 @@
  *   ⚠ fallback 에 서브넷 일치 검증을 걸지 않는다. 2026-07-25 에 보드와 브로커가
  *     같은 SSID 인데 다른 /24 를 받는 환경에서 그 검증 때문에 접속을 시도조차
  *     못 한 적이 있다. mDNS 결과에만 검증을 남긴다(도달 불가 주소를 거르기 위해).
+ *
+ * 2026-10-15 — 펌프별 명령 토픽을 모두 구독하고, 어느 토픽으로 왔는지(펌프 번호)를
+ *   핸들러에 넘긴다. 상태도 펌프별 토픽으로 낸다. MQTT 접속은 하나다.
  */
 
 #include <WiFi.h>
@@ -20,7 +23,8 @@
 #include <PubSubClient.h>
 #include "pump_config.h"
 
-typedef void (*CommandHandler)(const String&);
+// (펌프 번호 0-base, 명령 문자열)
+typedef void (*CommandHandler)(int, const String&);
 
 class PumpNet {
 public:
@@ -42,9 +46,10 @@ public:
   int  rssi()    const { return WiFi.RSSI(); }
   const char* brokerDesc() const { return _brokerDesc; }
 
-  bool publishStatus(const String& payload) {
+  bool publishStatus(int idx, const String& payload) {
     if (!_mqtt.connected()) return false;
-    return _mqtt.publish(TOPIC_STATUS, payload.c_str());
+    if (idx < 0 || idx >= PUMP_COUNT) return false;
+    return _mqtt.publish(TOPIC_STATUS[idx], payload.c_str());
   }
 
   // 명령 응답 — status 와 다른 토픽으로 보낸다(게이트웨이 파서와 섞이지 않게).
@@ -55,7 +60,7 @@ public:
 
   // 매 loop() 마다. 절대 막지 않는다.
   //
-  // pumpBusy = 모터가 구동 중. 이때는 **접속 시도를 건너뛴다.**
+  // pumpBusy = 모터가(하나라도) 구동 중. 이때는 **접속 시도를 건너뛴다.**
   //   MDNS.queryHost() 와 mqtt.connect() 는 수백 ms~수초를 블로킹한다. 구동 중에
   //   이게 끼어들면 STEP 펄스 간격이 무너져 실제 속도가 명령의 절반까지 떨어진다
   //   (2026-07-29 실측: 40Hz 명령이 22Hz 로 나왔다). 재접속은 몇 초 늦어도 되지만
@@ -86,7 +91,7 @@ public:
     Serial.print("MQTT 접속...");
     if (_mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS)) {
       Serial.println("성공");
-      _mqtt.subscribe(TOPIC_CMD);
+      for (int i = 0; i < PUMP_COUNT; i++) _mqtt.subscribe(TOPIC_CMD[i]);
     } else {
       Serial.printf("실패 rc=%d (3s 후 재시도) — 오프라인이어도 시리얼로 제어 가능\n",
                     _mqtt.state());
@@ -104,12 +109,20 @@ private:
 
   static PumpNet* _self;
 
+  // 토픽 → 펌프 번호. 모르는 토픽은 -1 (구독한 적 없으므로 오지 않지만 방어).
+  static int topicIndex(const char* topic) {
+    for (int i = 0; i < PUMP_COUNT; i++) if (strcmp(topic, TOPIC_CMD[i]) == 0) return i;
+    return -1;
+  }
+
   static void trampoline(char* topic, byte* payload, unsigned int len) {
     if (!_self || !_self->_onCommand) return;
+    int idx = topicIndex(topic);
+    if (idx < 0) return;
     String msg;
     msg.reserve(len);
     for (unsigned int i = 0; i < len; i++) msg += (char)payload[i];
-    _self->_onCommand(msg);
+    _self->_onCommand(idx, msg);
   }
 
   void startWifi() {

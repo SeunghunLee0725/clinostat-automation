@@ -21,6 +21,11 @@
  *     → 항상 정해진 값을 쓰고, dir 명령으로 바꾼다.
  *
  *  5) 급출발하면 탈조(stall)한다 → 목표 펄스율까지 선형 램프업.
+ *
+ * 2026-10-15 — 엔진 인스턴스를 모터 수만큼 둔다. 각 인스턴스는 PumpConfig 의
+ *   motor[idx] 만 본다(핀·spm). 펄스폭·EN 극성은 보드 공통. 두 엔진이 한 loop() 안에서
+ *   번갈아 tick 되므로, 한쪽의 버스트(최대 24펄스 × pulseUs)가 다른 쪽을 그만큼 늦추지만
+ *   캐치업 로직이 평균 펄스율을 지킨다.
  */
 
 #include "pump_config.h"
@@ -29,26 +34,30 @@ enum PumpMode { PM_IDLE, PM_SPINUP, PM_RUN, PM_MANUAL, PM_HZ, PM_SWEEP };
 
 class PumpDrive {
 public:
-  void begin(PumpConfig* cfg) {
+  void begin(PumpConfig* cfg, int idx) {
     _cfg = cfg;
+    _idx = idx;
     applyWiring();
   }
 
+  int index() const { return _idx; }
+
   // 배선 설정이 바뀌면 호출. 이전 STEP 핀은 LOW 로 내려둔다.
   void applyWiring() {
-    if (_activeStepGpio >= 0 && _activeStepGpio != _cfg->stepGpio) {
+    const MotorConfig& m = motor();
+    if (_activeStepGpio >= 0 && _activeStepGpio != m.stepGpio) {
       digitalWrite(_activeStepGpio, LOW);
     }
-    pinMode(_cfg->stepGpio, OUTPUT);
-    digitalWrite(_cfg->stepGpio, LOW);
-    _activeStepGpio = _cfg->stepGpio;
+    pinMode(m.stepGpio, OUTPUT);
+    digitalWrite(m.stepGpio, LOW);
+    _activeStepGpio = m.stepGpio;
 
-    if (_cfg->dirGpio >= 0) {
-      pinMode(_cfg->dirGpio, OUTPUT);
-      digitalWrite(_cfg->dirGpio, _dirForward ? HIGH : LOW);
+    if (m.dirGpio >= 0) {
+      pinMode(m.dirGpio, OUTPUT);
+      digitalWrite(m.dirGpio, _dirForward ? HIGH : LOW);
     }
-    if (_cfg->enConnected()) {
-      pinMode(_cfg->enGpio, OUTPUT);
+    if (m.enConnected()) {
+      pinMode(m.enGpio, OUTPUT);
       setEnable(_energized);
     }
   }
@@ -75,8 +84,8 @@ public:
   // 매뉴얼의 current_spm. hz 모드는 분당 스텝으로 환산해 보고한다.
   long currentSpm() const {
     switch (_mode) {
-      case PM_RUN:    return _cfg->spm;
-      case PM_SPINUP: return _cfg->spinspm;
+      case PM_RUN:    return motor().spm;
+      case PM_SPINUP: return motor().spinspm;
       case PM_MANUAL: return SPM_MAX;
       case PM_HZ:     return (long)(_targetHz * 60.0f);
       default:        return 0;
@@ -86,8 +95,8 @@ public:
   // ---- 명령 ----
   void start() {
     setEnable(true);
-    if (_cfg->spinsteps > 0) { _mode = PM_SPINUP; _spinRemaining = _cfg->spinsteps; }
-    else                     { _mode = PM_RUN; }
+    if (motor().spinsteps > 0) { _mode = PM_SPINUP; _spinRemaining = motor().spinsteps; }
+    else                       { _mode = PM_RUN; }
     beginMotion(spmToHz(currentSpm()));
   }
 
@@ -95,7 +104,7 @@ public:
     _mode = PM_IDLE;
     _spinRemaining = _manualRemaining = 0;
     _sweepIdx = -1;
-    digitalWrite(_cfg->stepGpio, LOW);
+    digitalWrite(motor().stepGpio, LOW);
     // EN 이 배선돼 있으면 코일 전류를 끊는다. 미배선이면 드라이버가 계속 여자 상태다
     // (2026-07-29 현장: 회전 없이 전류만 흘러 드라이버가 과열됐다 — VMOT 를 내려야 한다).
     setEnable(false);
@@ -126,7 +135,7 @@ public:
 
   void setDirection(bool forward) {
     _dirForward = forward;
-    if (_cfg->dirGpio >= 0) digitalWrite(_cfg->dirGpio, forward ? HIGH : LOW);
+    if (motor().dirGpio >= 0) digitalWrite(motor().dirGpio, forward ? HIGH : LOW);
   }
   bool direction() const { return _dirForward; }
 
@@ -134,7 +143,7 @@ public:
 
   // 코일 여자만 켜고 끄기. EN 미배선이면 false 를 돌려주어 호출부가 알 수 있게 한다.
   bool hold(bool on) {
-    if (!_cfg->enConnected()) return false;
+    if (!motor().enConnected()) return false;
     setEnable(on);
     return true;
   }
@@ -150,6 +159,7 @@ public:
 
   // 배선 탐색: 헤더 핀을 하나씩 정해진 시간 동안 펄스한다. 비블로킹.
   // 어느 구간에서 모터가 반응하는지 보면 실제 STEP 배선을 찾을 수 있다.
+  // 다른 모터의 핀은 건너뛴다 — 그 모터가 같이 돌면 결과를 읽을 수 없다.
   void sweep(float hz, unsigned long msPerPin) {
     _sweepHz    = (hz < 1) ? 1 : hz;
     _sweepMs    = msPerPin ? msPerPin : 4000;
@@ -192,6 +202,7 @@ public:
 
 private:
   PumpConfig* _cfg = nullptr;
+  int _idx = 0;
 
   PumpMode _mode = PM_IDLE;
   PumpMode _prevMode = PM_IDLE;
@@ -216,12 +227,14 @@ private:
   float _sweepHz = 250;
   unsigned long _sweepMs = 4000, _sweepUntil = 0;
 
+  const MotorConfig& motor() const { return _cfg->motor[_idx]; }
+
   static float spmToHz(long spm) { return (float)spm / 60.0f; }
 
   void setEnable(bool on) {
     _energized = on;
-    if (!_cfg->enConnected()) return;   // 미배선 → 드라이버 내부 풀다운으로 상시 활성
-    digitalWrite(_cfg->enGpio, _cfg->enActiveLow ? (on ? LOW : HIGH) : (on ? HIGH : LOW));
+    if (!motor().enConnected()) return;   // 미배선 → 드라이버 내부 풀다운으로 상시 활성
+    digitalWrite(motor().enGpio, _cfg->enActiveLow ? (on ? LOW : HIGH) : (on ? HIGH : LOW));
   }
 
   // 목표 펄스율로 이행 시작. 정지 상태에서 고속으로 급출발하면 탈조하므로 램프를 건다.
@@ -233,7 +246,7 @@ private:
     _rampMs      = (hz > 60.0f) ? 1000 : 0;
     _rampStartMs = millis();
     _lastStepUs  = micros();
-    if (_cfg->dirGpio >= 0) digitalWrite(_cfg->dirGpio, _dirForward ? HIGH : LOW);
+    if (motor().dirGpio >= 0) digitalWrite(motor().dirGpio, _dirForward ? HIGH : LOW);
   }
 
   float rampedHz(unsigned long /*nowUs*/) const {
@@ -244,9 +257,9 @@ private:
   }
 
   void emitStep() {
-    digitalWrite(_cfg->stepGpio, HIGH);
+    digitalWrite(motor().stepGpio, HIGH);
     delayMicroseconds(_cfg->pulseUs);
-    digitalWrite(_cfg->stepGpio, LOW);
+    digitalWrite(motor().stepGpio, LOW);
     _pos++;
   }
 
@@ -255,7 +268,7 @@ private:
     if (_mode == PM_SPINUP) {
       if (--_spinRemaining <= 0) {
         _mode = PM_RUN;
-        beginMotion(spmToHz(_cfg->spm));
+        beginMotion(spmToHz(motor().spm));
         return false;
       }
     } else if (_mode == PM_MANUAL) {
@@ -269,10 +282,10 @@ private:
     return true;
   }
 
-  // ENABLE 로 쓰는 핀은 스윕에서 건너뛴다. 그 핀을 250Hz 로 두들기면 드라이버가
-  // 껐다 켜졌다 반복해 결과를 읽을 수 없게 되고, 코일에 불필요한 열이 쌓인다.
+  // ENABLE 로 쓰는 핀과 다른 모터의 핀은 스윕에서 건너뛴다. EN 을 250Hz 로 두들기면
+  // 드라이버가 껐다 켜졌다 반복해 결과를 읽을 수 없게 되고, 코일에 불필요한 열이 쌓인다.
   bool sweepSkip(int idx) const {
-    return _cfg->enConnected() && XIAO_D_GPIO[idx] == _cfg->enGpio;
+    return _cfg->sweepReserved(XIAO_D_GPIO[idx], _idx);
   }
 
   void applySweepPin() {

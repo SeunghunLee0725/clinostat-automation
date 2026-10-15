@@ -22,6 +22,33 @@
 
 AccelStepper 의존성을 제거했다(자체 엔진으로 대체). 필요한 라이브러리는 **PubSubClient** 뿐.
 
+## 펌프 2대 (2026-10-15)
+
+보드 하나가 **DRV8825 두 개**를 몬다. 엔진(`PumpDrive`) 인스턴스가 `PUMP_COUNT`(=2)개 있고
+각자 독립된 STEP/DIR/EN 핀·spm·`pos` 를 가진다. 두 모터는 완전히 개별 운전된다.
+
+| | 펌프 1 | 펌프 2 |
+|---|---|---|
+| 기본 핀 | STEP=D9(GPIO20) DIR=D10(GPIO18) — 2026-07-29 실기 확인 | STEP=D7(GPIO17) DIR=D8(GPIO19) — **미검증 기본값** |
+| NVS 키 | 기존 그대로 (`stepGpio`, `spm` …) | 접미사 `2` (`stepGpio2`, `spm2` …) |
+| MQTT 명령 | `s25007/board1/cmd` | `s25007/board1/p2/cmd` |
+| MQTT 상태 | `s25007/board1/status` | `s25007/board1/p2/status` |
+| 시리얼 접두어 | 없음 또는 `p1:` | `p2:` |
+
+- 상태 줄 맨 앞에 `pump=N` 이 붙는다. 나머지 형식은 매뉴얼 RevB §5 + `pos` 그대로.
+- 응답 토픽 `s25007/board1/reply` 는 공유하며 펌프 2 응답은 `p2 ` 접두어가 붙는다.
+- `stopall` 은 두 펌프를 함께 멈춘다. 보드 공통 명령(`led` `pincheck` `broker` `brokerhost`
+  `enpol` `pulse` `help` `status` `wiring`)은 접두어를 무시한다.
+- `pin:` 으로 다른 펌프가 이미 쓰는 GPIO 를 지정하면 거부한다(두 모터가 한 선을 공유하면 개별 운전이 깨진다).
+- `sweep` 은 다른 펌프의 STEP/DIR/EN 핀을 건너뛴다 — 그 모터가 같이 돌면 결과를 읽을 수 없다.
+
+**펌프 2 처음 붙일 때:** 시리얼에서 `p2:sweep` → 모터 2 가 반응한 gpio 를 `p2:pin:step:<gpio>` 로
+고정 → `p2:hz:2000:10` 으로 회전 확인. 펌프 1 과 같은 순서다.
+
+전원: 12 V → 두 드라이버 VMOT 병렬. MP1584 5 V → XIAO 5 V 핀 + 두 드라이버의 SLP/RST.
+DRV8825 는 로직 전원 핀이 없으므로(VMOT 로부터 내부 3.3 V 생성) 5 V 는 SLP/RST 를 HIGH 로
+잡는 신호일 뿐이다. 각 VMOT 에 100 µF 이상 전해 콘덴서, 공통 GND, Vref 전류 제한 설정.
+
 ### 파일 구성
 | 파일 | 역할 |
 |---|---|
@@ -38,6 +65,7 @@ AccelStepper 의존성을 제거했다(자체 엔진으로 대체). 필요한 �
 - **MQTT**: 1883 평문 + 인증. 브로커는 익명 접속을 금지해야 한다 (아래 브로커 절 참고)
 - **토픽**: `s25007/board1/cmd` (구독) · `s25007/board1/status` (2초 주기)
   · `s25007/board1/reply` (명령 응답 — status 파서와 섞이지 않도록 분리)
+  · 펌프 2 는 `s25007/board1/p2/cmd` · `s25007/board1/p2/status` (위 "펌프 2대" 절)
 - **브로커 주소**: mDNS 호스트명 우선, 실패 시 고정 IP. **둘 다 런타임 변경 가능** →
   브로커가 옮겨가도 재flash 불필요.
 
@@ -46,8 +74,9 @@ AccelStepper 의존성을 제거했다(자체 엔진으로 대체). 필요한 �
 매뉴얼 RevB §4 명령은 의미까지 그대로 유지한다:
 
 ```
-start · stop · once · manualstep:N · spm:N · spinsteps:N · spinspm:N · led:on|off
+[p1:|p2:]start · stop · once · manualstep:N · spm:N · spinsteps:N · spinspm:N · led:on|off · stopall
 ```
+접두어가 없으면 펌프 1 이다. MQTT 는 토픽이 대상을 정하므로 접두어가 필요 없다.
 
 재작성하며 추가한 진단·배선 명령:
 
@@ -66,6 +95,7 @@ start · stop · once · manualstep:N · spm:N · spinsteps:N · spinspm:N · le
 | `status` · `wiring` · `resetpos` · `help` | 조회·초기화 |
 
 **같은 명령을 MQTT 와 USB 시리얼 양쪽에서 쓴다.** 시리얼은 115200, 한 줄에 하나.
+모터 명령(`hz` `sweep` `pin` `pinD` `dir` `hold` `resetpos` 등)도 `p2:` 접두어로 펌프 2 를 고른다.
 
 ## ⚠ 육안으로 회전을 확인할 때
 
