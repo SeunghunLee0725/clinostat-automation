@@ -118,7 +118,9 @@ public:
     _manualRemaining = steps;
     _mode = PM_MANUAL;
     setEnable(true);
-    beginMotion(spmToHz(SPM_MAX));
+    // 요청된 spm 으로 돈다. 예전엔 SPM_MAX(2400=40Hz) 고정이라 게이트웨이가 보낸 spm 이
+    // 무시됐고, 그 속도는 현장 모터가 진동만 하는 대역이었다(2026-10-15).
+    beginMotion(spmToHz(motor().spm));
   }
 
   // 육안 확인용: 펄스율을 직접 준다. 매뉴얼 SPM 상한을 우회하지만 같은 엔진을 쓰므로

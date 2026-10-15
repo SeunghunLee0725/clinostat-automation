@@ -40,8 +40,11 @@ inline bool isHeaderGpio(int gpio) {
   return false;
 }
 
-// ---- 매뉴얼이 규정한 범위 (RevB §4) ----
-static const long SPM_MIN = 1, SPM_MAX = 2400;
+// ---- spm 범위 ----
+// 매뉴얼(RevB §4)은 상한 2400(=40Hz)이었으나 2026-10-15 현장 모터는 600~1000Hz 에서만
+// 돌았다(그 아래는 진동, 1500Hz 는 정지). 게이트웨이가 36000(600Hz)을 기본으로 보내므로
+// 상한을 1000Hz 로 올린다. 게이트웨이 PUMP_SPM_MAX 와 같이 움직여야 한다.
+static const long SPM_MIN = 1, SPM_MAX = 60000;
 
 // ---- 이 보드가 모는 펌프(모터) 수 ----
 static const int PUMP_COUNT = 2;
