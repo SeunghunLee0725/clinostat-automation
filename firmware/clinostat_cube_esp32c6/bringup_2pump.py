@@ -5,6 +5,11 @@
 파이에서:   ~/spacebio-gateway/.venv/bin/python bringup_2pump.py
 맥에서:     python3 bringup_2pump.py            (pyserial 필요)
 
+USB 없이 MQTT 로도 같은 절차를 돌릴 수 있다(펌웨어가 cmd 토픽을 시리얼과 같은 파서로 처리).
+보드를 파이 USB 에 꽂으면 Pi 4 가 저전압 재부팅하는 경우(2026-10-15) 이 경로를 쓴다:
+파이에서:   ~/spacebio-gateway/.venv/bin/python bringup_2pump.py --mqtt
+            (브로커 주소·계정은 --config 의 mqtt: 절에서 읽는다. 기본 ~/spacebio-gateway/config.yaml)
+
 기본 순서:
   help → 2펌프 펌웨어인지 확인 (p1:/p2: 안내가 있어야 한다)
   wiring/status → 두 펌프의 핀과 pos 기준값
@@ -24,11 +29,11 @@ from __future__ import annotations
 
 import argparse
 import glob
-import re
+import os
+import queue
 import sys
 import time
-
-import serial  # pyserial
+from typing import Union
 
 BAUD = 115200
 PORT_PATTERNS = (
@@ -45,8 +50,21 @@ def find_port() -> str:
     sys.exit("ESP32 시리얼 포트를 찾지 못했다. --port 로 지정하거나 USB 연결을 확인하라.")
 
 
-class Board:
+def parse_status(lines: list[str]) -> dict[int, dict[str, str]]:
+    """`status` 응답(pump=N,...) 을 펌프별 dict 로."""
+    out: dict[int, dict[str, str]] = {}
+    for line in lines:
+        if not line.startswith("pump="):
+            continue
+        fields = dict(kv.split("=", 1) for kv in line.split(",") if "=" in kv)
+        out[int(fields["pump"])] = fields
+    return out
+
+
+class SerialBoard:
     def __init__(self, port: str) -> None:
+        import serial  # pyserial
+
         self.ser = serial.Serial(port, BAUD, timeout=0.2)
         time.sleep(0.5)
         self.drain(1.0)                 # 부팅 로그·이전 출력 버리기
@@ -71,14 +89,72 @@ class Board:
         return lines
 
     def status(self) -> dict[int, dict[str, str]]:
-        """`status` 응답(pump=N,...) 을 펌프별 dict 로."""
-        out: dict[int, dict[str, str]] = {}
-        for line in self.send("status", echo=False):
-            if not line.startswith("pump="):
-                continue
-            fields = dict(kv.split("=", 1) for kv in line.split(",") if "=" in kv)
-            out[int(fields["pump"])] = fields
-        return out
+        return parse_status(self.send("status", echo=False))
+
+
+MQTT_CMD_TOPIC = "s25007/board1/cmd"        # p1:/p2: 접두어를 펌웨어가 해석하므로 토픽 하나로 충분
+MQTT_REPLY_TOPIC = "s25007/board1/reply"
+DEFAULT_CONFIG = os.path.expanduser("~/spacebio-gateway/config.yaml")
+
+
+def load_mqtt_config(path: str) -> dict[str, object]:
+    import yaml
+
+    with open(path, encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh) or {}
+    mqtt = raw.get("mqtt") or {}
+    return {
+        "host": str(mqtt.get("host", "127.0.0.1")),
+        "port": int(mqtt.get("port", 1883)),
+        "username": mqtt.get("username"),
+        "password": mqtt.get("password"),
+    }
+
+
+class MqttBoard:
+    """시리얼 대신 브로커를 거쳐 보드에 명령을 보낸다. 응답은 reply 토픽으로 돌아온다."""
+
+    def __init__(self, cfg: dict[str, object]) -> None:
+        import paho.mqtt.client as mqtt
+
+        self._rx: queue.Queue[str] = queue.Queue()
+        self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="bringup-2pump")
+        if cfg["username"]:
+            self._client.username_pw_set(str(cfg["username"]), str(cfg["password"] or ""))
+        self._client.on_message = lambda _c, _u, msg: self._rx.put(msg.payload.decode("utf-8", "replace"))
+        self._client.connect(str(cfg["host"]), int(cfg["port"]), keepalive=30)
+        self._client.subscribe(MQTT_REPLY_TOPIC)
+        self._client.loop_start()
+        time.sleep(0.5)
+        self.drain(0.5)
+
+    def drain(self, seconds: float) -> list[str]:
+        end = time.monotonic() + seconds
+        lines: list[str] = []
+        while True:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return lines
+            try:
+                lines.append(self._rx.get(timeout=remaining).rstrip())
+            except queue.Empty:
+                return lines
+
+    def send(self, cmd: str, listen: float = 0.8, echo: bool = True) -> list[str]:
+        info = self._client.publish(MQTT_CMD_TOPIC, cmd, qos=1)
+        info.wait_for_publish(timeout=3)
+        lines = self.drain(max(listen, 1.5))     # 무선 왕복은 시리얼보다 느리다
+        if echo:
+            print(f"> {cmd}")
+            for line in lines:
+                print(f"  {line}")
+        return lines
+
+    def status(self) -> dict[int, dict[str, str]]:
+        return parse_status(self.send("status", echo=False))
+
+
+Board = Union[SerialBoard, MqttBoard]
 
 
 def expected_pulses(hz: float, sec: float) -> float:
@@ -166,6 +242,20 @@ def summarize(results: list[tuple[str, bool, str]]) -> int:
     return 1 if failed else 0
 
 
+def open_board(args: argparse.Namespace) -> Board:
+    if args.mqtt:
+        cfg = load_mqtt_config(args.config)
+        print(f"브로커: {cfg['host']}:{cfg['port']} (계정 {cfg['username'] or '없음'})")
+        board = MqttBoard(cfg)
+        if not board.send("help", listen=2.0, echo=False):
+            sys.exit("보드가 reply 토픽에 응답하지 않는다. 보드 WiFi/브로커 접속을 확인하라 "
+                     "(mosquitto_sub -t 's25007/board1/#' 로 status 가 2 초마다 오는지).")
+        return board
+    port = args.port or find_port()
+    print(f"포트: {port}")
+    return SerialBoard(port)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="시리얼 포트 (기본: by-id 의 Espressif 링크 자동 탐색)")
@@ -174,11 +264,11 @@ def main() -> int:
     ap.add_argument("--cmd", help="명령 하나만 보내고 응답을 보여준다 (예: 'p2:sweep')")
     ap.add_argument("--listen", type=float, default=3.0, help="--cmd 응답을 들을 시간 (sweep 은 50 초 이상)")
     ap.add_argument("--status-only", action="store_true", help="구동 없이 wiring/status 만")
+    ap.add_argument("--mqtt", action="store_true", help="USB 대신 MQTT 브로커 경유 (보드가 WiFi 로 붙어 있어야 한다)")
+    ap.add_argument("--config", default=DEFAULT_CONFIG, help="--mqtt 때 브로커 주소·계정을 읽을 게이트웨이 config.yaml")
     args = ap.parse_args()
 
-    port = args.port or find_port()
-    print(f"포트: {port}")
-    board = Board(port)
+    board = open_board(args)
 
     if args.cmd:
         board.send(args.cmd, listen=args.listen)
