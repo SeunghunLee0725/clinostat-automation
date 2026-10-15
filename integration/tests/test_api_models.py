@@ -500,8 +500,12 @@ def test_serial_live_sample_allows_null_raw_adc():
 
 def test_pump_step_request_bounds_match_firmware():
     assert m.PumpStepRequest(steps=200, spm=600).steps == 200
+    # 2026-10-15 현장: 모터가 600~1000Hz 에서만 돈다. 기본값은 600Hz(=36000 spm),
+    # 상한은 1000Hz(=60000 spm). 옛 상한 2400(40Hz)은 진동만 하는 대역이다.
+    assert m.PumpStepRequest(steps=200).spm == m.PUMP_SPM_DEFAULT == 36000
+    assert m.PumpStepRequest(steps=200, spm=60000).spm == 60000
     for bad in ({"steps": 0, "spm": 600}, {"steps": 200, "spm": 0},
-                {"steps": 200, "spm": 2401}):
+                {"steps": 200, "spm": 60001}):
         with pytest.raises(ValidationError):
             m.PumpStepRequest(**bad)
 

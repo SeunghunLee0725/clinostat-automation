@@ -105,7 +105,7 @@ def test_pump_step_on_simulated_backend_is_409(client):
 
 
 def test_pump_step_out_of_range_is_422(client):
-    assert client.post("/api/pump/step", json={"steps": 200, "spm": 9999}).status_code == 422
+    assert client.post("/api/pump/step", json={"steps": 200, "spm": 60001}).status_code == 422
 
 
 def test_pump_dispense_on_wireless_backend_is_409_not_500(tmp_path):

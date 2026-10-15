@@ -176,12 +176,13 @@ async def test_dispense_converts_volume_to_steps_and_rate_to_spm():
 
 @pytest.mark.asyncio
 async def test_dispense_clamps_spm_to_firmware_range():
-    """환산값이 펌웨어 상한(2400)을 넘으면 잘라낸다 — 거절하면 쓸 수 없다."""
+    """환산값이 펌웨어 상한(60000 = 1000Hz)을 넘으면 잘라낸다 — 거절하면 쓸 수 없다."""
     pump, client = _pump()
-    pump.set_calibration(0.5)
+    pump.set_calibration(0.01)         # 0.01 µL/스텝
+    # 20 µL/s / 0.01 = 2000 스텝/s = 120000 spm → 60000 으로
     await pump.dispense(PumpDispenseRequest(
-        request_id="d", rate_ul_s=100.0, target_volume_ul=120.0))
-    assert ("s25007/board1/cmd", "spm:2400") in client.published
+        request_id="d", rate_ul_s=20.0, target_volume_ul=120.0))
+    assert ("s25007/board1/cmd", "spm:60000") in client.published
 
 
 @pytest.mark.asyncio

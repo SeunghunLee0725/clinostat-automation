@@ -234,8 +234,11 @@ class SensorStopRequest(_Request):
 # ─────────────────────────── 펌프 요청 ───────────────────────────
 
 #: 무선 펌프 보드(ESP32-C6) 펌웨어 clampSpm 범위 (firmware SPM_MIN/SPM_MAX).
+#: 2026-10-15 현장: 모터가 600~1000Hz(36000~60000 spm)에서만 돈다. 옛 상한 2400(40Hz)은
+#: 진동만 하는 대역이라 상한을 1000Hz 로, 기본값을 600Hz 로 올렸다.
 PUMP_SPM_MIN = 1
-PUMP_SPM_MAX = 2400
+PUMP_SPM_MAX = 60_000
+PUMP_SPM_DEFAULT = 36_000
 PumpSpm = Annotated[int, Field(ge=PUMP_SPM_MIN, le=PUMP_SPM_MAX)]
 PumpSteps = Annotated[int, Field(ge=1, le=100_000)]
 
@@ -270,7 +273,7 @@ class PumpStepRequest(_PumpTargetRequest):
     """
 
     steps: PumpSteps
-    spm: PumpSpm = 1200
+    spm: PumpSpm = PUMP_SPM_DEFAULT
 
 
 class PumpDispenseRequest(_PumpTargetRequest):
