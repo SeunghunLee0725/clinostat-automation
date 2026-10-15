@@ -1,9 +1,11 @@
 """무선 실기 펌프 백엔드 — ESP32-C6 보드를 MQTT로 제어 (실기 연동).
 
-보드 펌웨어는 오직 MQTT로만 명령을 받는다(USB는 로그 전용). 명령은
-`s25007/board1/cmd`로 발행하고 상태는 `s25007/board1/status`를 구독한다.
+명령은 `s25007/board1/cmd`로 발행하고 상태는 `s25007/board1/status`를 구독한다.
+보드 하나가 펌프 둘을 몰며(2026-10-15), 펌프 2 는 같은 보드의
+`s25007/board1/p2/cmd` · `s25007/board1/p2/status` 를 쓴다. 인스턴스 하나가 펌프
+하나를 대리하므로 펌프마다 MqttPump 를 만든다 (브로커 접속도 각자).
 
-    상태: ip=..,rssi=..,run=on/off,mode=IDLE|SPINUP|RUN|MANUAL,current_spm=..,
+    상태: pump=N,ip=..,rssi=..,run=on/off,mode=IDLE|SPINUP|RUN|MANUAL,current_spm=..,
           spin_rem=..,manual_rem=..,spinsteps=..,spinspm=..,spm=..,pos=..
 
 ⚠ 보드에는 비상정지 하드웨어가 없다. 그래서 estop은 **게이트웨이 측 소프트웨어
@@ -42,6 +44,19 @@ logger = logging.getLogger("gateway.mqtt_pump")
 
 CMD_TOPIC = "s25007/board1/cmd"
 STATUS_TOPIC = "s25007/board1/status"
+
+
+def _pump_segment(pump_id: int) -> str:
+    """펌프 1 은 매뉴얼 토픽 그대로(앱·구 게이트웨이 호환), 그 외는 `pN/` 을 끼운다."""
+    return "" if pump_id == 1 else f"p{pump_id}/"
+
+
+def cmd_topic(pump_id: int) -> str:
+    return f"s25007/board1/{_pump_segment(pump_id)}cmd"
+
+
+def status_topic(pump_id: int) -> str:
+    return f"s25007/board1/{_pump_segment(pump_id)}status"
 
 
 class PumpConflictError(Exception):
@@ -87,6 +102,7 @@ class MqttPump:
     def __init__(
         self,
         *,
+        pump_id: int = 1,
         host: str = "127.0.0.1",
         port: int = 1883,
         username: Optional[str] = None,
@@ -94,6 +110,9 @@ class MqttPump:
         ul_per_step: Optional[float] = None,
         client_factory: Optional[Callable[[], object]] = None,
     ) -> None:
+        self._pump_id = pump_id
+        self._cmd_topic = cmd_topic(pump_id)
+        self._status_topic = status_topic(pump_id)
         self._host = host
         self._port = port
         self._username = username
@@ -136,8 +155,8 @@ class MqttPump:
 
         paho v1 은 (client, userdata, flags, rc), v2 는 뒤에 properties 가 더 붙는다.
         """
-        client.subscribe(STATUS_TOPIC)
-        logger.info("mqtt pump subscribed to %s", STATUS_TOPIC)
+        client.subscribe(self._status_topic)
+        logger.info("mqtt pump %d subscribed to %s", self._pump_id, self._status_topic)
 
     def _make_client(self):
         if self._client_factory is not None:
@@ -177,7 +196,7 @@ class MqttPump:
     def _publish(self, command: str) -> None:
         if self._client is None:
             raise PumpConflictError("pump broker not connected", code="pump_offline")
-        self._client.publish(CMD_TOPIC, command)
+        self._client.publish(self._cmd_topic, command)
 
     # ─────────────────────────── 세션 ───────────────────────────
 
@@ -223,19 +242,20 @@ class MqttPump:
             }
         # 래치는 보드 텔레메트리보다 우선한다 — 상태를 아직 못 받았어도 래치돼
         # 있으면 반드시 emergency_stopped를 보고해야 안전하다.
+        pid = self._pump_id
         if latched:
-            base = PumpStatus(mode=PUMP_MODE_WIRELESS,
+            base = PumpStatus(pump_id=pid, mode=PUMP_MODE_WIRELESS,
                               state=PumpState.EMERGENCY_STOPPED, estop_latched=True)
             if board is None:
                 return base.model_copy(update=extra)
             return base.model_copy(update={
                 "position_steps": board.position_steps, "spm": board.spm, **extra})
         if board is None:
-            return PumpStatus(mode=PUMP_MODE_WIRELESS,
+            return PumpStatus(pump_id=pid, mode=PUMP_MODE_WIRELESS,
                               state=PumpState.IDLE).model_copy(update=extra)
         state = PumpState.RUNNING if board.run else PumpState.IDLE
         return PumpStatus(
-            mode=PUMP_MODE_WIRELESS, state=state, estop_latched=latched,
+            pump_id=pid, mode=PUMP_MODE_WIRELESS, state=state, estop_latched=latched,
             position_steps=board.position_steps, spm=board.spm,
         ).model_copy(update=extra)
 

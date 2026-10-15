@@ -59,7 +59,7 @@ def test_request_id_header_is_echoed_and_generated_when_absent(client: TestClien
 
 def test_status_routes_expose_full_and_per_component_views(client: TestClient):
     full = client.get("/api/status").json()["data"]
-    assert set(full.keys()) == {"gateway", "sensor", "pump", "session"}
+    assert set(full.keys()) == {"gateway", "sensor", "pump", "pumps", "session"}
 
     sensor = client.get("/api/sensor/status").json()["data"]
     assert sensor == full["sensor"]

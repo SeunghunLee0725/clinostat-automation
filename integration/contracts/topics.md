@@ -19,6 +19,19 @@
 
 > 기존 앱 토픽 `s25007/board1/{status,cmd}` = 클리노스텟과 동일 → `clinostat`로 매핑(마이그레이션 시 병행 구독).
 
+### 실기 무선 펌프 보드 (현행, `gateway/mqtt_pump.py` ↔ `firmware/clinostat_cube_esp32c6`)
+보드 하나가 펌프 둘을 몬다(2026-10-15). 펌프 1 은 매뉴얼 토픽 그대로, 펌프 2 는 `p2/` 를 끼운다.
+
+| 토픽 | 방향 | 용도 |
+|---|---|---|
+| `s25007/board1/cmd` | GW→보드 | 펌프 1 명령 (`start`·`stop`·`manualstep:N`·`spm:N` …). `p2:` 접두어로 펌프 2 도 가능 |
+| `s25007/board1/status` | 보드→GW | 펌프 1 상태 `pump=1,ip=,rssi=,run=,mode=,…,spm=,pos=` (2 s) |
+| `s25007/board1/p2/cmd` | GW→보드 | 펌프 2 명령 (접두어 불필요) |
+| `s25007/board1/p2/status` | 보드→GW | 펌프 2 상태 `pump=2,…` (2 s) |
+| `s25007/board1/reply` | 보드→GW | 명령 응답(공유). 펌프 2 응답은 `p2 ` 접두어 |
+
+게이트웨이 REST 는 요청 본문 `pump_id`(1부터)로 대상을 고른다. 정지·비상정지·해제는 `pump_id` 생략 = 전체.
+
 ## 페이로드 스키마 (JSON)
 
 ### 공통 필드

@@ -145,27 +145,63 @@ class GatewayRuntime:
         self._current_session_status = SessionStatus()
         self.recovery: Optional[RecoveryResult] = None
 
+        # 펌프마다 백엔드 인스턴스 하나. 번호는 1부터, 순서는 번호 순이다.
         # pump.backend == "wireless"면 실기 무선 펌프(MQTT), 아니면 모의 펌프.
         # 실기 펌프는 하드웨어 estop이 없어 게이트웨이 측 소프트웨어 래치를 쓴다.
-        estop_path = self._config.state_root / _ESTOP_LATCH_FILENAME
+        self._pumps: dict[int, Any] = {
+            pid: self._make_pump(pid) for pid in range(1, self._config.pump_count + 1)
+        }
+
+    def _make_pump(self, pump_id: int) -> Any:
         if self._config.pump_backend == "wireless":
-            self._pump: Any = MqttPump(
+            return MqttPump(
+                pump_id=pump_id,
                 host=self._config.mqtt_host, port=self._config.mqtt_port,
                 username=self._config.mqtt_username, password=self._config.mqtt_password,
                 ul_per_step=self._config.pump_ul_per_step,
             )
-        else:
-            self._pump = SimulatedPump(
-                event_sink=self._dispatch_pump_event,
-                estop_persistence=FileEstopLatchPersistence(estop_path),
+        # 펌프 1 의 래치 파일명은 단일 펌프 시절 그대로 — 재시작 후 래치 복원이 이어진다.
+        suffix = "" if pump_id == 1 else f"_p{pump_id}"
+        estop_path = self._config.state_root / _ESTOP_LATCH_FILENAME.replace(
+            ".json", f"{suffix}.json")
+        return SimulatedPump(
+            event_sink=lambda event, pid=pump_id: self._dispatch_pump_event(
+                event.model_copy(update={"pump_id": pid})),
+            estop_persistence=FileEstopLatchPersistence(estop_path),
+        )
+
+    def _pump_for(self, pump_id: int) -> Any:
+        """번호로 펌프 백엔드를 고른다. 설정에 없는 번호는 409 (`pump_unknown`)."""
+        pump = self._pumps.get(pump_id)
+        if pump is None:
+            raise MqttPumpConflictError(
+                f"pump {pump_id} is not configured (pump.count={len(self._pumps)})",
+                code="pump_unknown",
             )
+        return pump
+
+    def _pump_targets(self, pump_id: Optional[int]) -> list[tuple[int, Any]]:
+        """브로드캐스트 명령의 대상. None 이면 전부."""
+        if pump_id is None:
+            return list(self._pumps.items())
+        return [(pump_id, self._pump_for(pump_id))]
+
+    @staticmethod
+    def _stamp(status: PumpStatus, pump_id: int) -> PumpStatus:
+        """백엔드가 자기 번호를 모르면(모의 펌프) 런타임이 찍는다."""
+        return status if status.pump_id == pump_id else status.model_copy(
+            update={"pump_id": pump_id})
+
+    async def _pump_status(self, pump_id: int, pump: Any) -> PumpStatus:
+        return self._stamp(await pump.status(), pump_id)
 
     # ─────────────────────────── 라이프사이클 ───────────────────────────
 
     async def startup(self) -> None:
         """`recover_session()`으로 메타데이터만 복원한다 — 실행은 재개하지 않는다."""
-        if isinstance(self._pump, MqttPump):
-            self._pump.connect()          # 브로커 부재해도 예외를 삼킨다
+        for pump in self._pumps.values():
+            if isinstance(pump, MqttPump):
+                pump.connect()            # 브로커 부재해도 예외를 삼킨다
         sessions_root = self._config.data_root / "sessions"
         latest = _find_latest_session_dir(sessions_root)
         if latest is None:
@@ -192,8 +228,9 @@ class GatewayRuntime:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        if isinstance(self._pump, MqttPump):
-            self._pump.disconnect()
+        for pump in self._pumps.values():
+            if isinstance(pump, MqttPump):
+                pump.disconnect()
 
     def uptime_s(self) -> float:
         return time.monotonic() - self._started_monotonic
@@ -209,15 +246,19 @@ class GatewayRuntime:
             return await self._status_locked()
 
     async def _status_locked(self) -> GatewayStatus:
-        pump_status = await self._pump.status()
+        pump_statuses = tuple([
+            await self._pump_status(pid, pump) for pid, pump in self._pumps.items()
+        ])
         gateway_state = (
-            GatewayState.DEGRADED if pump_status.state == PumpState.FAULT
+            GatewayState.DEGRADED
+            if any(st.state == PumpState.FAULT for st in pump_statuses)
             else GatewayState.ONLINE
         )
         return GatewayStatus(
             gateway=GatewayComponent(state=gateway_state, last_seen_at=server_time()),
             sensor=self._sensor_status_locked(),
-            pump=pump_status,
+            pump=pump_statuses[0],
+            pumps=pump_statuses,
             session=self._current_session_status,
         )
 
@@ -473,6 +514,7 @@ class GatewayRuntime:
     async def pump_command(self, command: PumpCommand) -> Union[PumpStatus, dict[str, Any]]:
         async with self._lock:
             if isinstance(command, PumpDispenseRequest):
+                pump = self._pump_for(command.pump_id)
                 # 무선 실기 펌프는 µL 보정 상수가 없어 dispense 를 구현하지 않는다.
                 # 조건 없이 부르면 AttributeError → 500 이다. 지원하지 않는 것과
                 # 고장난 것은 다르게 보여야 하므로 409 로 거절한다.
@@ -480,20 +522,65 @@ class GatewayRuntime:
                 # 코드로만 문구를 고르므로, 같은 코드를 쓰면 주입 실패에 "모의 펌프
                 # 구성입니다" 라는 사실과 다른 안내가 나간다. 백엔드는 무선이 맞고,
                 # 막힌 이유는 µL 보정 상수가 없다는 것이다.
-                dispense = getattr(self._pump, "dispense", None)
+                dispense = getattr(pump, "dispense", None)
                 if dispense is None:
                     raise MqttPumpConflictError(
                         "volume dispense needs µL calibration; use step commands",
                         code="pump_volume_uncalibrated",
                     )
-                return await dispense(command)
+                return self._stamp(await dispense(command), command.pump_id)
             if isinstance(command, PumpStopRequest):
-                return await self._pump.stop(command)
+                return await self._broadcast_locked(
+                    command.pump_id, lambda pump: pump.stop(command))
             if isinstance(command, PumpEmergencyStopRequest):
-                return await self._pump.emergency_stop(command)
+                return await self._broadcast_locked(
+                    command.pump_id, lambda pump: pump.emergency_stop(command))
             if isinstance(command, PumpResetEmergencyStopRequest):
-                return await self._reset_emergency_stop_locked(command)
+                return await self._broadcast_locked(
+                    command.pump_id,
+                    lambda pump: self._reset_emergency_stop_one(pump, command))
             raise TypeError(f"unsupported pump command: {type(command)!r}")
+
+    async def _broadcast_locked(
+        self, pump_id: Optional[int], action: Any,
+    ) -> Union[PumpStatus, dict[str, Any]]:
+        """정지·비상정지·해제를 대상 펌프 전부에 차례로 적용한다.
+
+        대상이 하나면 그 펌프의 결과를 그대로 낸다(단일 펌프 시절 응답 형태).
+        전체면 펌프 1 의 결과에 `pumps`(전부의 상태)를 덧붙인다 — 기존 호출부는
+        `state` 만 보고, 새 화면은 `pumps` 로 각 카드를 갱신한다.
+        비상정지는 어느 하나가 실패해도 나머지를 계속 멈춘다.
+        """
+        targets = self._pump_targets(pump_id)
+        results: list[Union[PumpStatus, dict[str, Any]]] = []
+        first_error: Optional[BaseException] = None
+        for pid, pump in targets:
+            try:
+                result = await action(pump)
+            except Exception as exc:  # noqa: BLE001 — 한 펌프의 실패가 다른 펌프 정지를 막으면 안 된다
+                if first_error is None:
+                    first_error = exc
+                continue
+            results.append(self._stamp_result(result, pid))
+        if first_error is not None:
+            raise first_error
+        if len(targets) == 1:
+            return results[0]
+        first = results[0]
+        first_dict = first if isinstance(first, dict) else first.model_dump(mode="json")
+        return {
+            **first_dict,
+            "pumps": [
+                r if isinstance(r, dict) else r.model_dump(mode="json") for r in results
+            ],
+        }
+
+    def _stamp_result(
+        self, result: Union[PumpStatus, dict[str, Any]], pump_id: int,
+    ) -> Union[PumpStatus, dict[str, Any]]:
+        if isinstance(result, dict):
+            return {**result, "pump_id": pump_id}
+        return self._stamp(result, pump_id)
 
     async def pump_step(self, request: PumpStepRequest) -> PumpStatus:
         """실기 무선 펌프의 스텝 명령. 모의 펌프에는 스텝 개념이 없어 409.
@@ -505,13 +592,14 @@ class GatewayRuntime:
         올려보내면 `pump_estop_latched` 같은 정확한 코드가 나간다.
         """
         async with self._lock:
-            step = getattr(self._pump, "step", None)
+            pump = self._pump_for(request.pump_id)
+            step = getattr(pump, "step", None)
             if step is None:
                 raise MqttPumpConflictError(
                     "step commands require the wireless pump backend",
                     code="pump_backend_unsupported",
                 )
-            return await step(request)
+            return self._stamp(await step(request), request.pump_id)
 
     async def set_pump_calibration(
         self, request: PumpCalibrationRequest,
@@ -522,21 +610,22 @@ class GatewayRuntime:
         구해 운영자가 화면에서 넣는다.
         """
         async with self._lock:
-            setter = getattr(self._pump, "set_calibration", None)
+            pump = self._pump_for(request.pump_id)
+            setter = getattr(pump, "set_calibration", None)
             if setter is None:
                 raise MqttPumpConflictError(
                     "this pump backend has no step-based calibration",
                     code="pump_backend_unsupported",
                 )
             setter(request.ul_per_step)
-            return await self._pump.status()
+            return await self._pump_status(request.pump_id, pump)
 
-    async def _reset_emergency_stop_locked(
-        self, command: PumpResetEmergencyStopRequest,
+    async def _reset_emergency_stop_one(
+        self, pump: Any, command: PumpResetEmergencyStopRequest,
     ) -> dict[str, Any]:
         """PumpStatus 전체 + `previous_state`/`accepted`(스펙 6.5)를 합쳐 낸다."""
-        result = await self._pump.reset_emergency_stop(command)
-        status = await self._pump.status()
+        result = await pump.reset_emergency_stop(command)
+        status = await pump.status()
         return {
             **status.model_dump(mode="json"),
             "previous_state": result.previous_state.value,
@@ -611,7 +700,8 @@ class GatewayRuntime:
         )
         snapshot = store.start(command)
         self._active_store = store
-        await self._pump.begin_session()
+        for pump in self._pumps.values():
+            await pump.begin_session()
         return self._status_from_snapshot(snapshot)
 
     def _session_update_locked(self, command: SessionUpdateRequest) -> SessionStatus:
@@ -626,7 +716,8 @@ class GatewayRuntime:
             raise SessionNotActiveError("no session is currently active")
         snapshot = self._active_store.finish(command)
         self._active_store = None
-        await self._pump.end_session()
+        for pump in self._pumps.values():
+            await pump.end_session()
         return self._status_from_snapshot(snapshot)
 
 

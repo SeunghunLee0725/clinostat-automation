@@ -88,9 +88,12 @@ curl -s localhost:8010/health
 ```yaml
 pump:
   backend: wireless           # 실기 무선 펌프. 모의로 두려면 null
+  count: 2                    # 펌프 대수. 보드 하나가 둘을 몬다 (2026-10-15 키 추가)
   ul_per_step: 0.5            # 스텝당 토출량(실측). 비우면 부피 주입이 잠긴다
 mqtt:
-  host: <브로커 IP>            # 무선 펌프 보드가 붙는 브로커
+  host: 127.0.0.1             # 무선 펌프 보드가 붙는 브로커 — 파이 자체 mosquitto
+                              # ⚠ 다른 기계 IP(예: 노트북 Tailscale IP)를 넣어 두면
+                              #   그 기계에 브로커가 없을 때 펌프가 영영 offline 이다
   username: <계정>
   password: <암호>            # ⚠ 파이 로컬에만. 커밋 금지
 ble:

@@ -217,6 +217,7 @@ class SessionStore:
             "cause": event.cause,
             "request_id": event.request_id,
             "delivered_volume_ul": event.delivered_volume_ul,
+            "pump_id": event.pump_id,
         }
         try:
             self._pump_fh.write(json.dumps(payload, ensure_ascii=False) + "\n")

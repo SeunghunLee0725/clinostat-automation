@@ -14,6 +14,8 @@ from typing import Any, Optional
 
 import yaml
 
+from gateway.api_models import PUMP_COUNT_MAX
+
 
 @dataclass(frozen=True)
 class GatewayConfig:
@@ -30,6 +32,9 @@ class GatewayConfig:
     default_temperature_c: float = 25.0
     default_battery_pct: int = 100
     pump_backend: Optional[str] = None
+    #: 펌프 대수(1~PUMP_COUNT_MAX). 보드 하나가 드라이버 둘을 몰며, 펌프 2 는
+    #: MQTT 토픽 `s25007/board1/p2/...` 를 쓴다. 모의 백엔드도 대수만큼 만든다.
+    pump_count: int = 1
     pump_min_volume_ul: float = 1.0
     pump_max_volume_ul: float = 1000.0
     pump_min_rate_ul_s: float = 1.0
@@ -77,6 +82,9 @@ def load_config(path: Path) -> GatewayConfig:
     coordinator = raw.get("coordinator") or {}
 
     host = str(gw.get("host", "127.0.0.1"))
+    pump_count = int(pump.get("count", 1))
+    if not 1 <= pump_count <= PUMP_COUNT_MAX:
+        raise ValueError(f"pump.count must be 1..{PUMP_COUNT_MAX}, got {pump_count}")
     if host == "0.0.0.0":  # noqa: S104 — 여기선 값 검사일 뿐, 바인딩이 아니다
         raise ValueError("gateway must bind to 127.0.0.1 only; 0.0.0.0 is forbidden")
 
@@ -92,6 +100,7 @@ def load_config(path: Path) -> GatewayConfig:
         default_temperature_c=float(sensor.get("default_temperature_c", 25.0)),
         default_battery_pct=int(sensor.get("default_battery_pct", 100)),
         pump_backend=pump.get("backend"),
+        pump_count=pump_count,
         pump_min_volume_ul=float(limits.get("min_volume_ul", 1.0)),
         pump_max_volume_ul=float(limits.get("max_volume_ul", 1000.0)),
         pump_min_rate_ul_s=float(limits.get("min_rate_ul_s", 1.0)),

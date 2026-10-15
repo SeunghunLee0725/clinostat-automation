@@ -239,8 +239,30 @@ PUMP_SPM_MAX = 2400
 PumpSpm = Annotated[int, Field(ge=PUMP_SPM_MIN, le=PUMP_SPM_MAX)]
 PumpSteps = Annotated[int, Field(ge=1, le=100_000)]
 
+#: 게이트웨이가 다룰 수 있는 펌프 수 상한. 보드 하나(ESP32-C6)가 드라이버 둘을 몬다
+#: (firmware PUMP_COUNT). 실제 대수는 config `pump.count`(1~PUMP_COUNT_MAX).
+PUMP_COUNT_MAX = 2
+#: 펌프 번호는 1부터 — 화면·펌웨어 토픽(`p2`)·기록이 모두 사람이 세는 번호를 쓴다.
+PumpId = Annotated[int, Field(ge=1, le=PUMP_COUNT_MAX)]
 
-class PumpStepRequest(_Request):
+
+class _PumpTargetRequest(_Request):
+    """대상 펌프가 하나인 명령. 생략하면 펌프 1 (단일 펌프 시절 요청과 호환)."""
+
+    pump_id: PumpId = 1
+
+
+class _PumpBroadcastRequest(_Request):
+    """대상을 생략하면 **모든 펌프**에 적용되는 명령 (정지·비상정지·해제).
+
+    STOP ALL 경로(프록시 `stop_all`)는 본문에 pump_id 를 넣지 않는다 — 펌프가 몇 대든
+    전부 멈춰야 하므로 생략 = 전체가 안전한 기본값이다.
+    """
+
+    pump_id: Optional[PumpId] = None
+
+
+class PumpStepRequest(_PumpTargetRequest):
     """실기 무선 펌프의 스텝 단위 명령 (µL 보정이 없어 스텝으로 노출).
 
     펌웨어는 부피가 아니라 스텝으로만 돈다. µL 보정 상수가 확보되기 전까지
@@ -251,7 +273,7 @@ class PumpStepRequest(_Request):
     spm: PumpSpm = 1200
 
 
-class PumpDispenseRequest(_Request):
+class PumpDispenseRequest(_PumpTargetRequest):
     rate_ul_s: RateUlS
     target_volume_ul: VolumeUlS
 
@@ -261,21 +283,21 @@ class PumpDispenseRequest(_Request):
         return round(value, VOLUME_DECIMALS)
 
 
-class PumpCalibrationRequest(_Request):
+class PumpCalibrationRequest(_PumpTargetRequest):
     """스텝당 토출량을 넣는다. 이 값이 있어야 부피 주입을 스텝으로 환산할 수 있다."""
 
     ul_per_step: UlPerStep
 
 
-class PumpStopRequest(_Request):
+class PumpStopRequest(_PumpBroadcastRequest):
     pass
 
 
-class PumpEmergencyStopRequest(_Request):
+class PumpEmergencyStopRequest(_PumpBroadcastRequest):
     pass
 
 
-class PumpResetEmergencyStopRequest(_Request):
+class PumpResetEmergencyStopRequest(_PumpBroadcastRequest):
     """운영자 확인 문자열이 정확히 일치해야 한다. 틀리면 422 (스펙 6.5)."""
 
     acknowledgement: Literal[ESTOP_RESET_ACKNOWLEDGEMENT]
@@ -346,6 +368,8 @@ class PumpEvent(_Status):
     request_id: str
     delivered_volume_ul: float
     at: AwareDatetime
+    #: 어느 펌프의 전이인지. 백엔드는 자기 번호를 모르므로 런타임이 찍는다.
+    pump_id: int = 1
 
     @property
     def ts_ms(self) -> int:
@@ -373,6 +397,8 @@ PUMP_MODE_WIRELESS = "WIRELESS"
 
 
 class PumpStatus(_Status):
+    #: 펌프 번호(1부터). `GatewayStatus.pumps` 의 순서와 같다.
+    pump_id: int = 1
     #: SIMULATED = 모의, WIRELESS = 실기 MQTT 펌프 보드.
     mode: str = PUMP_MODE
     state: PumpState = PumpState.IDLE
@@ -412,8 +438,17 @@ class SessionStatus(_Status):
 class GatewayStatus(_Status):
     gateway: GatewayComponent
     sensor: SensorStatus
+    #: 펌프 1 — 단일 펌프 시절 화면·프록시·STOP ALL 과의 호환용. `pumps[0]` 과 같다.
     pump: PumpStatus
+    #: 설정된 펌프 전부, 번호 순. 생략하면 `pump` 하나로 채운다.
+    pumps: tuple[PumpStatus, ...] = ()
     session: SessionStatus
+
+    @model_validator(mode="after")
+    def _default_pumps_to_pump(self) -> "GatewayStatus":
+        if not self.pumps:
+            object.__setattr__(self, "pumps", (self.pump,))
+        return self
 
 
 class StatusMessage(_Status):

@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from gateway.app import _build_status_message
 from gateway.api_models import GatewayComponent, GatewayState, GatewayStatus, PumpStatus, SensorStatus, SessionStatus
 
-EXPECTED_TOP_LEVEL_KEYS = {"gateway", "sensor", "pump", "session"}
+EXPECTED_TOP_LEVEL_KEYS = {"gateway", "sensor", "pump", "pumps", "session"}
 
 
 def _receive_status(ws) -> dict:

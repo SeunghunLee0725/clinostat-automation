@@ -469,7 +469,7 @@ def test_gateway_status_composes_all_components():
         session=m.SessionStatus(),
     )
     dumped = status.model_dump()
-    assert set(dumped) == {"gateway", "sensor", "pump", "session"}
+    assert set(dumped) == {"gateway", "sensor", "pump", "pumps", "session"}
     assert dumped["session"]["session_id"] is None
 
 
@@ -484,7 +484,7 @@ def test_websocket_message_shape():
     dumped = msg.model_dump()
     assert dumped["type"] == "status"
     assert dumped["sequence"] == 7
-    assert set(dumped["data"]) == {"gateway", "sensor", "pump", "session"}
+    assert set(dumped["data"]) == {"gateway", "sensor", "pump", "pumps", "session"}
 
 
 # ─────────────────────────── 실기 확장 (2026-07-25) ───────────────────────────
