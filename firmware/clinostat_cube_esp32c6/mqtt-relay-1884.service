@@ -1,0 +1,16 @@
+# 파이 사용자 서비스 (sudo 불필요). 현장 방화벽이 1883 을 drop 해서 보드는 1884 로 들어온다.
+#   mkdir -p ~/.config/systemd/user && cp mqtt-relay-1884.service ~/.config/systemd/user/
+#   loginctl enable-linger $USER        # 로그인 없이도 부팅 때 사용자 서비스가 뜨게
+#   systemctl --user daemon-reload && systemctl --user enable --now mqtt-relay-1884.service
+# ExecStart 경로는 mqtt_relay_1884.py 를 둔 곳으로 고친다.
+[Unit]
+Description=MQTT relay 1884->127.0.0.1:1883 (site firewall drops 1883)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -u %h/pump_fw_20261015_2pump/mqtt_relay_1884.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
