@@ -1944,12 +1944,20 @@ window.addEventListener('resize', scheduleCameraResize);
           <div class="sb-sec-title">③ 스텝 구동</div>
           <div class="sb-fields">
             <label data-for="pumpStepCount">스텝 수</label>
-            <label data-for="pumpStepSpm">속도 (spm)</label>
-            <input data-f="pumpStepCount" type="number" value="200" step="1" min="1">
-            <input data-f="pumpStepSpm" type="number" value="1200" step="1" min="1" max="2400">
+            <label data-for="pumpStepSpm">속도 (spm) <span data-f="pumpStepHz"></span></label>
+            <input data-f="pumpStepCount" type="number" value="6000" step="1" min="1">
+            <input data-f="pumpStepSpm" type="number" value="36000" step="1" min="1" max="60000">
           </div>
           <div class="sb-actions">
             <button data-f="pumpSendSteps">스텝 전송</button>
+          </div>
+          <!-- 2026-10-15 현장: 모터가 600~1000Hz 에서만 돈다. 초 단위 프리셋이 안전하다
+               (수백 스텝은 1초 램프 구간에서 끝나 버린다). -->
+          <div class="sb-fields">
+            <label data-for="pumpRunSec">600Hz 구동 시간 (초)</label>
+            <label></label>
+            <input data-f="pumpRunSec" type="number" value="10" step="1" min="1" max="600">
+            <button data-f="pumpRun600">600Hz로 구동</button>
           </div>
         </div>
       </div>
@@ -2139,6 +2147,9 @@ function spacebioEnsurePumpCards(pumps) {
   wanted.forEach((pid) => host.appendChild(spacebioBuildPumpCard(pid)));
 }
 
+// 현장 모터가 도는 대역(600~1000Hz)의 하한. 2026-10-15 실측.
+const PUMP_RUN_HZ = 600;
+
 function spacebioBuildPumpCard(pid) {
   const card = sbEl('pumpCardTemplate').content.firstElementChild.cloneNode(true);
   card.dataset.pump = pid;
@@ -2172,6 +2183,20 @@ function spacebioBuildPumpCard(pid) {
       spm: Number(f('pumpStepSpm').value) } });
     spacebioLog('펌프 ' + pid + ' 스텝 전송');
   };
+  // 600Hz × N초 프리셋. 별도 API 가 아니라 스텝 명령이라 µL 누적·pos 추적이 그대로다.
+  f('pumpRun600').onclick = async () => {
+    const sec = Number(f('pumpRunSec').value);
+    await spacebioFetch('/api/spacebio/pump/step', { method: 'POST', body: {
+      pump_id: pumpId,
+      steps: Math.round(PUMP_RUN_HZ * sec),
+      spm: PUMP_RUN_HZ * 60 } });
+    spacebioLog('펌프 ' + pid + ' 600Hz ' + sec + '초 구동');
+  };
+  const showHz = () => {
+    f('pumpStepHz').textContent = '= ' + (Number(f('pumpStepSpm').value) / 60).toFixed(0) + ' Hz';
+  };
+  f('pumpStepSpm').oninput = showHz;
+  showHz();
   return card;
 }
 
@@ -2190,7 +2215,7 @@ function spacebioSyncPumpControls() {
     ['pumpRate', 'pumpTargetVolume', 'pumpDispense'].forEach((name) => {
       f(name).disabled = !volumeReady;
     });
-    ['pumpStepCount', 'pumpStepSpm', 'pumpSendSteps'].forEach((name) => {
+    ['pumpStepCount', 'pumpStepSpm', 'pumpSendSteps', 'pumpRunSec', 'pumpRun600'].forEach((name) => {
       f(name).disabled = !wireless;
     });
     ['pumpUlPerStep', 'pumpApplyCalibration'].forEach((name) => {

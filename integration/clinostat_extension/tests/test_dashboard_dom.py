@@ -97,7 +97,8 @@ PUMP_CARD_FIELDS = [
     "pumpEstopLatched", "pumpModeHint", "pumpCalibrationSection", "pumpUlPerStep",
     "pumpApplyCalibration", "pumpVolumeSection", "pumpRate", "pumpTargetVolume",
     "pumpDeliveredVolume", "pumpCumulativeVolume", "pumpDispense", "pumpStop",
-    "pumpStepSection", "pumpStepCount", "pumpStepSpm", "pumpSendSteps",
+    "pumpStepSection", "pumpStepCount", "pumpStepSpm", "pumpStepHz", "pumpSendSteps",
+    "pumpRunSec", "pumpRun600",
 ]
 
 
@@ -122,7 +123,16 @@ def test_pump_card_commands_carry_pump_id(work):
     for path in ("/api/spacebio/pump/calibration", "/api/spacebio/pump/dispense",
                  "/api/spacebio/pump/stop", "/api/spacebio/pump/step"):
         assert path in build, f"{path} 가 카드 핸들러에 없다"
-    assert build.count("pump_id: pumpId") == 4
+    assert build.count("pump_id: pumpId") == 5      # 보정·주입·정지·스텝·600Hz 구동
+
+
+def test_pump_card_600hz_preset_uses_step_endpoint(work):
+    """600Hz 구동 버튼은 별도 API 가 아니라 스텝 명령(spm=36000)으로 간다 — µL 누적이 그대로 산다."""
+    build = work[work.index("function spacebioBuildPumpCard"):]
+    build = build[:build.index("\nfunction ", 1)]
+    run = build[build.index("f('pumpRun600').onclick"):][:400]
+    assert "/api/spacebio/pump/step" in run and "PUMP_RUN_HZ" in run
+    assert "const PUMP_RUN_HZ = 600" in work
 
 
 def test_emergency_stop_targets_every_pump(work):
