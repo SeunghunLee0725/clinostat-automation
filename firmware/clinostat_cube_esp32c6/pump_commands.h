@@ -17,6 +17,7 @@
  *   pinD:step|dir|en:<D번호> 같은 것을 D핀 번호로 지정 (D9 → GPIO20).
  *   enpol:low|high    ENABLE 극성.
  *   pulse:<us>        STEP HIGH 폭. 드라이버가 펄스를 놓치는 의심이 들면 올린다.
+ *   ramp:<hz>[,<ms>]  출발 램프 시작 펄스율과 길이. 저속에서 못 도는 모터는 목표와 같게.
  *   dir:fwd|rev       회전 방향.
  *   hold:on|off       코일 여자만 켜고 끄기 (EN 배선된 경우).
  *   pincheck:<gpio>   패드 무결성.
@@ -75,6 +76,7 @@ inline void replyWiring(int idx) {
              " en="    + String(m.enGpio) +
              " enpol=" + String(gCfg.enActiveLow ? "low" : "high") +
              " pulse=" + String(gCfg.pulseUs) + "us" +
+             " ramp="  + String(gCfg.rampStartHz) + "Hz/" + String(gCfg.rampMs) + "ms" +
              " dirval=" + String(gPumps[idx].direction() ? "fwd" : "rev");
   replyFor(idx, s);
 }
@@ -206,6 +208,17 @@ inline void handleCommandFor(int idx, const String& raw) {
     gCfg.saveWiring(gPrefs, idx);
     replyWiring(idx);
   }
+  else if (c.startsWith("ramp:")) {
+    String v = cmdArg(c, 5);
+    int comma = v.indexOf(',');
+    int hz = (comma < 0 ? v : v.substring(0, comma)).toInt();
+    int ms = (comma < 0) ? gCfg.rampMs : v.substring(comma + 1).toInt();
+    if (hz < 1 || hz > 20000 || ms < 0 || ms > 60000) { replyFor(idx, "err ramp 는 1~20000 Hz, 0~60000 ms"); return; }
+    gCfg.rampStartHz = hz;                     // 보드 공통
+    gCfg.rampMs      = ms;
+    gCfg.saveWiring(gPrefs, idx);
+    replyWiring(idx);
+  }
   else if (c.startsWith("dir:")) {
     String v = cmdArg(c, 4);
     pump.setDirection(!(v == "rev" || v == "1" || v == "back"));
@@ -252,7 +265,7 @@ inline void handleCommandFor(int idx, const String& raw) {
   else if (c == "help") {
     gReply("cmd: [p1:|p2:]start stop once manualstep:N spm:N spinsteps:N spinspm:N  stopall  led:on|off");
     gReply("     [p1:|p2:]hz:<hz>[:<sec>] sweep[:hz[:ms]] dir:fwd|rev hold:on|off resetpos");
-    gReply("     [p1:|p2:]pin:step|dir|en:<gpio> pinD:step|dir|en:<D> enpol:low|high pulse:<us>");
+    gReply("     [p1:|p2:]pin:step|dir|en:<gpio> pinD:step|dir|en:<D> enpol:low|high pulse:<us> ramp:<hz>[,<ms>]");
     gReply("     pincheck:<gpio> broker:<ip>[:<port>] brokerhost:<name> wiring status help");
     gReply("     접두어 없음 = 펌프 1. MQTT 는 토픽이 대상을 정한다 (…/board1/p2/cmd = 펌프 2).");
   }

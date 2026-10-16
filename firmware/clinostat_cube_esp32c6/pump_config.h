@@ -92,6 +92,10 @@ struct PumpConfig {
   bool enActiveLow = true;   // A4988/DRV8825 ENABLE 은 active-low
   int  pulseUs    = 5;       // STEP HIGH 폭. A4988 최소 1us / DRV8825 1.9us → 5us 는 충분한 여유.
                              // 드라이버가 펄스를 놓치는 의심이 들면 20~50 으로 올려 시험한다.
+  int  rampStartHz = 100;    // 출발 램프 시작 펄스율. 목표가 이보다 낮으면 램프 없이 바로 간다.
+                             // 저속 대역(100~400Hz)에서 돌지 못하는 모터는 목표와 같게(예: 600)
+                             // 두어 램프를 없애야 출발이 안정된다(2026-10-16 현장).
+  int  rampMs      = 1000;   // 램프 길이(ms). 0 이면 램프 없음.
 
   // 브로커 — mDNS 실패 시 쓸 고정 IP. 빈 문자열이면 mDNS 만 시도.
   //   ⚠ 2026-07-25 교훈: fallback 에 sameSubnet() 검증을 걸었더니 보드와 브로커가
@@ -120,6 +124,8 @@ struct PumpConfig {
     }
     enActiveLow = p.getBool("enActLow",  enActiveLow);
     pulseUs     = p.getInt ("pulseUs",   pulseUs);
+    rampStartHz = p.getInt ("rampHz",    rampStartHz);
+    rampMs      = p.getInt ("rampMs",    rampMs);
     p.getString("brokerIp",   brokerIp,   sizeof(brokerIp));
     p.getString("brokerHost", brokerHost, sizeof(brokerHost));
     brokerPort = p.getInt("brokerPort", brokerPort);
@@ -139,6 +145,8 @@ struct PumpConfig {
     p.putInt (key("enGpio",   idx).c_str(), m.enGpio);
     p.putBool("enActLow", enActiveLow);
     p.putInt ("pulseUs",  pulseUs);
+    p.putInt ("rampHz",   rampStartHz);
+    p.putInt ("rampMs",   rampMs);
   }
 
   void saveBroker(Preferences& p) const {

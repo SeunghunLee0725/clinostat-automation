@@ -102,6 +102,7 @@ public:
 
   void stop() {
     _mode = PM_IDLE;
+    _targetHz = 0;
     _spinRemaining = _manualRemaining = 0;
     _sweepIdx = -1;
     digitalWrite(motor().stepGpio, LOW);
@@ -240,12 +241,13 @@ private:
   }
 
   // 목표 펄스율로 이행 시작. 정지 상태에서 고속으로 급출발하면 탈조하므로 램프를 건다.
-  // 저속(60Hz 이하)은 램프가 무의미하므로 즉시 목표로 간다.
+  // 이미 돌고 있으면(운전 중 재명령) 지금 속도에서 이어간다 — 시작 속도로 되돌리면
+  // 저속 대역을 다시 지나며 탈조한다. 램프 시작 속도·길이는 설정값(ramp:)이다.
   void beginMotion(float hz) {
+    const float from = (_targetHz > 0) ? rampedHz(micros()) : (float)_cfg->rampStartHz;
     _targetHz    = hz;
-    _startHz     = (hz > 60.0f) ? 100.0f : hz;
-    if (_startHz > hz) _startHz = hz;
-    _rampMs      = (hz > 60.0f) ? 1000 : 0;
+    _startHz     = (from < hz) ? from : hz;
+    _rampMs      = (_startHz < hz) ? (unsigned long)_cfg->rampMs : 0;
     _rampStartMs = millis();
     _lastStepUs  = micros();
     if (motor().dirGpio >= 0) digitalWrite(motor().dirGpio, _dirForward ? HIGH : LOW);
