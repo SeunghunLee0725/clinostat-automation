@@ -24,7 +24,7 @@ DEFAULT_LLM_HOSTS: tuple[dict[str, Any], ...] = (
     {"name": "dgx-spark", "url": "http://100.90.190.82:8081", "model": "gemma-4-12b-it", "timeout_s": 20.0},
     {"name": "kims-pi-2", "url": "http://100.85.45.76:8081", "model": "gemma-4-E2B-it", "timeout_s": 90.0},
 )
-PROBE_TIMEOUT_S = 3.0
+PROBE_TIMEOUT_S = 6.0        # 파이→Spark 는 Tailscale 중계라 /health 도 2 s 를 넘길 때가 있다
 LLM_MAX_TOKENS = 240
 LLM_TEMPERATURE = 0.2
 

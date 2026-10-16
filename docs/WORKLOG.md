@@ -6,6 +6,37 @@
 
 ---
 
+## 2026-10-17 — 통합 관제 콘솔(/console) + 음성 비서 배포
+
+### 지금 상태 (이 줄만 읽어도 됨)
+
+| 항목 | 상태 |
+|---|---|
+| 새 페이지 | `http://100.77.1.42:8000/console` (`work/static/console.html`, 커밋 703cd93). 기존 `/` 화면과 별개 파일이라 baseline 계약 무관 |
+| 카드 | 클리노스텟(/ws), 저항센서(/ws/spacebio, SVG 스파크라인), 펌프 1·2(주파수 입력형), **전기신호 제어(빈 카드, 전부 disabled)**, 음성 비서, 이벤트 로그·비상정지 |
+| 음성 비서 서버 | `work/assistant.py` + `/api/assistant/{status,command,summary}`. 규칙 파서가 명령을 만들고, 장치를 움직이는 명령은 브라우저가 [실행] 확인 뒤 기존 `/api/*` 로 보냄. LLM 글은 절대 실행되지 않음 |
+| 온보드 LLM | Tailscale llama-server 2대, 순서대로 시도: **dgx-spark** `100.90.190.82:8081` gemma-4-12b-it(GPU, 파이에서 1~3 s) → **kims-pi-2** `100.85.45.76:8081` gemma-4-E2B-it(CPU, ~10 s). 둘 다 죽으면 규칙 요약(`template_summary`) |
+| LLM 기동 방법 | 두 호스트 `shlee@` 에서 `nohup setsid ~/llm_onboard/llama.cpp/build/bin/llama-server -m ~/llm_onboard/models/<gguf> --host 0.0.0.0 --port 8081 --jinja …`(Spark `-ngl 99 -t 8 -c 8192`, pi5 `-t 4 -c 4096`). 로그 `~/llm_onboard/logs/assistant_server.log`. **재부팅하면 사라짐**(systemd 미등록, pi5 linger 꺼짐) — 콘솔 LLM 칩이 "LLM 없음"이면 다시 띄울 것 |
+| gemma-4 주의 | 기본값은 thinking 을 `reasoning_content` 에 쓰고 본문이 비어 8 s 걸린다. 클라이언트가 `chat_template_kwargs.enable_thinking=false` 를 보내 1 s 대 |
+| STT/TTS | 브라우저 Web Speech API(ko-KR)·speechSynthesis. HTTP 주소라 Chrome 이 마이크 권한을 매번 물을 수 있음. 글 입력창으로도 같은 경로 |
+| 실측 | 파이에서 "지금 상태 알려 줘" → Spark 3.2 s 한국어 요약. 콘솔에서 "펌프 1 100헤르츠 2초" → 확인 → 실행 → 펌프 1 위치 6000→6200 |
+| 테스트 | 771 passed(`--deselect tests/test_ble_sensor.py`). 새 테스트 `test_assistant.py`, `test_console_dom.py` |
+| 파이 배포 | server.py·assistant.py·console.html(백업 `~/spacebio-backups/20261017_001258`). `deploy_to_pi.sh` 에 두 파일 추가됨 |
+
+### 음성 명령 규칙 (서버 `assistant.parse_command`)
+- `펌프 N X헤르츠 [Y초]` → 확인 후 스텝 명령(steps=X·Y, spm=X·60). 한글 숫자(삼백, 이십) 됨. 1~1000 Hz, 펌프 1·2
+- `펌프 [N] 정지`, `클리노스텟 정지`, `전부/모두 정지`, `비상 정지`, `측정 정지` → 확인 없이 즉시
+- `측정 시작`, `클리노스텟 시작` → 확인 필요(클리노스텟은 안전 확인 체크박스도 필요)
+- `상태/현황/요약/보고` → LLM 요약(없으면 규칙 요약). 그 외 문장 → LLM 대화(실행 없음)
+
+### 다음 할 일
+- 전기신호 장치가 정해지면 `csEstimCard` 필드(채널·파형·진폭·주파수)와 `/api/spacebio/estim/*` 를 채운다
+- llama-server 를 systemd(user) 로 영구화(pi5 는 `loginctl enable-linger` 에 sudo 필요)
+- 음성 호출어("스페이스바이오") 상시 듣기는 보류 — 마이크 버튼 방식 유지
+- 저항센서 연결은 아래 2026-10-16 "다음 세션" 절 그대로
+
+---
+
 ## 2026-10-16 — 펌프 2대 무선 운전 완성, 다음은 전기신호 센서 연결
 
 ### 지금 상태 (이 줄만 읽어도 됨)
