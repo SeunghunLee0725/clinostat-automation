@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpaceBio Mission Control</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* 통합 관제 콘솔 — 기존 / 화면과 별개 파일. 같은 서버 API 만 쓴다. */
+:root{
+  --bg:#0A0F1C; --bar:#0D1425; --card:#111A2E; --card2:#0E1526; --line:#1E2A44; --line2:#2A3550;
+  --text:#E6ECF5; --text2:#A9B4CC; --mute:#8B97B3; --accent:#2DD4BF; --accent2:#F5B542;
+  --ok-bg:#0F2E2A; --ok-fg:#7FE3D6; --warn-bg:#33250C; --warn-fg:#FFD27A; --bad-bg:#3A1612; --bad-fg:#FF9A86;
+  --mute-bg:#1A2238; --sans:'IBM Plex Sans KR',system-ui,sans-serif; --disp:'Space Grotesk',var(--sans); --mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans)}
+a{color:var(--ok-fg)}
+button{font-family:var(--sans)}
+.btn{font:600 14px/1 var(--sans);border:1px solid var(--line2);background:#141C30;color:var(--text);border-radius:10px;padding:0 16px;height:44px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap}
+.btn:hover{border-color:#3C4A6E;background:#1A2440}
+.btn.primary{background:var(--accent);color:#06231F;border-color:var(--accent)}
+.btn.primary:hover{background:#5BE0CF}
+.btn.danger{background:#2A1512;color:var(--bad-fg);border-color:#5A2A22}
+.btn.danger:hover{background:#3A1B16}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.input,select.input{font:500 15px var(--mono);background:var(--card2);border:1px solid var(--line2);color:var(--text);border-radius:10px;height:44px;padding:0 12px;width:100%}
+.input:disabled{opacity:.5}
+.lbl{font:500 12px var(--sans);color:var(--mute);letter-spacing:.04em;text-transform:uppercase}
+.pill{font:600 12px/1 var(--sans);border-radius:999px;padding:7px 11px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.pill .dot{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.9}
+.ok{background:var(--ok-bg);color:var(--ok-fg)} .warn{background:var(--warn-bg);color:var(--warn-fg)}
+.bad{background:var(--bad-bg);color:var(--bad-fg)} .mute{background:var(--mute-bg);color:var(--mute)}
+.num{font:500 28px/1 var(--disp);color:#F4F7FB;letter-spacing:-.01em}
+.unit{font:500 13px var(--sans);color:var(--mute);margin-left:4px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.card h2{margin:0;font:700 17px var(--disp);color:#F4F7FB;display:flex;align-items:center;gap:10px}
+.card h2 svg{width:18px;height:18px;flex:0 0 18px}
+.card h2 .pill{margin-left:auto}
+.kv{display:flex;flex-direction:column;gap:4px;min-width:0}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.log{font:500 12.5px/1.55 var(--mono);color:var(--text2)}
+.log b{color:var(--ok-fg);font-weight:500}
+.bubble{border-radius:14px;padding:12px 14px;font:400 14px/1.5 var(--sans);max-width:92%;white-space:pre-wrap}
+.bubble.me{background:#1A2440;color:var(--text);align-self:flex-end;border-bottom-right-radius:4px}
+.bubble.ai{background:var(--ok-bg);color:#D9F7F2;align-self:flex-start;border-bottom-left-radius:4px}
+.bubble.sys{background:var(--mute-bg);color:var(--mute);align-self:center;font-size:12px}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:14px 24px;border-bottom:1px solid var(--line);background:var(--bar)}
+.brand{display:flex;align-items:center;gap:12px;min-width:0}
+.brand .mark{width:36px;height:36px;border-radius:10px;background:var(--ok-bg);display:flex;align-items:center;justify-content:center;flex:0 0 36px}
+.brand .title{font:700 18px var(--disp);letter-spacing:-.01em}
+.brand .sub{font-size:12px;color:var(--mute)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+.layout{display:flex;flex-wrap:wrap}
+nav.side{width:220px;flex:0 1 220px;padding:18px 14px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:4px}
+nav.side a{display:flex;align-items:center;gap:10px;height:44px;padding:0 14px;border-radius:10px;color:var(--text2);font:500 14px var(--sans);text-decoration:none}
+nav.side a:hover{background:#141C30;color:#F4F7FB}
+nav.side svg{width:18px;height:18px}
+nav.side .foot{margin-top:auto;padding:12px 14px;border-radius:12px;background:var(--card2);font-size:12px;color:var(--mute);line-height:1.5}
+main{flex:999 1 560px;min-width:0;padding:22px 24px 32px;display:flex;flex-direction:column;gap:20px}
+section.cols2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+section.cols3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+section.cols4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.ov{gap:8px}
+.ov .num{font-size:22px}
+.spark{width:100%;height:120px;background:var(--card2);border-radius:12px;display:block}
+.estim{border-style:dashed;border-color:var(--line2);background:var(--card2)}
+.estim h2{color:var(--text2)}
+.voice{background:linear-gradient(180deg,#111A2E 0%,#0F2320 100%)}
+.mic{width:88px;height:88px;border-radius:50%;border:2px solid var(--line2);background:#141C30;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:0 0 88px;color:var(--text2)}
+.mic.on{border-color:var(--accent);background:var(--ok-bg);color:var(--accent);box-shadow:0 0 0 8px rgba(45,212,191,.12)}
+.mic svg{width:34px;height:34px}
+.bars{width:100%;height:48px;display:block}
+.bars rect{fill:var(--accent);opacity:.35;transition:height .12s,y .12s}
+.chat{display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--bg);border-radius:14px;border:1px solid var(--line);max-height:320px;overflow-y:auto}
+.confirm{display:none;gap:8px;align-self:flex-start}
+.confirm.show{display:flex}
+.events{display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto}
+.err{font:500 12.5px var(--mono);color:var(--bad-fg);min-height:18px}
+.chk{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text2);min-height:44px}
+.chk input{width:20px;height:20px;accent-color:var(--accent)}
+.stale .card{opacity:.75}
+@media (max-width:1180px){section.cols4{grid-template-columns:repeat(2,minmax(0,1fr))} section.cols3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:820px){
+  header{padding:12px 16px} main{padding:14px 16px 24px} .chips{margin-left:0}
+  nav.side{width:100%;flex-basis:100%;border-right:0;border-bottom:1px solid var(--line);flex-direction:row;flex-wrap:wrap;padding:8px 10px}
+  nav.side .foot{display:none}
+  section.cols2,section.cols3,section.cols4{grid-template-columns:1fr}
+  .grid4{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#2DD4BF" stroke-width="2" aria-hidden="true" style="width:20px;height:20px"><circle cx="12" cy="12" r="9"></circle><ellipse cx="12" cy="12" rx="9" ry="3.5"></ellipse><path d="M12 3v18"></path></svg></div>
+    <div><div class="title">SpaceBio Mission Control</div><div class="sub">클리노스텟 · 저항센서 · 펌프 · 전기신호 · 음성 비서 — <a href="/">기존 화면</a></div></div>
+  </div>
+  <div class="chips">
+    <span class="pill mute" id="csChipPi"><span class="dot"></span>Pi 연결 중</span>
+    <span class="pill mute" id="csChipGateway"><span class="dot"></span>Gateway</span>
+    <span class="pill mute" id="csChipBoard"><span class="dot"></span>ESP32</span>
+    <span class="pill mute" id="csChipBle"><span class="dot"></span>BLE 센서</span>
+    <span class="pill mute" id="csChipEstim"><span class="dot"></span>전기신호 미연결</span>
+    <span class="pill mute" id="csChipLlm"><span class="dot"></span>LLM 확인 중</span>
+  </div>
+  <div class="row">
+    <div id="csClock" style="font:500 15px var(--mono);color:var(--text2)">--:--:--</div>
+    <button class="btn danger" type="button" id="csStopAll">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true" style="width:16px;height:16px"><path d="M12 3v9"></path><path d="M6.3 6.3a8 8 0 1 0 11.4 0"></path></svg>
+      전체 정지
+    </button>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="side" aria-label="관제 구역">
+    <a href="#overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"></rect><rect x="13" y="3" width="8" height="8" rx="2"></rect><rect x="3" y="13" width="8" height="8" rx="2"></rect><rect x="13" y="13" width="8" height="8" rx="2"></rect></svg>개요</a>
+    <a href="#clinostat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><ellipse cx="12" cy="12" rx="9" ry="3.5"></ellipse></svg>클리노스텟</a>
+    <a href="#sensor"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>저항센서</a>
+    <a href="#pumps"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z"></path></svg>펌프 구동</a>
+    <a href="#estim"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"></path></svg>전기신호 제어</a>
+    <a href="#voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>음성 비서</a>
+    <a href="#session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4h16v16H4z"></path><path d="M8 9h8M8 13h5"></path></svg>세션 · 로그</a>
+    <div class="foot">세션 <b id="csSessionId" style="color:var(--text);font-weight:600">-</b><br>상태 <span id="csSessionState">idle</span></div>
+  </nav>
+
+  <main>
+    <section class="cols4" id="overview">
+      <div class="card ov"><span class="lbl">클리노스텟</span><div><span class="num" id="csOvStrategy">—</span></div><span class="pill mute" id="csOvStrategyState" style="align-self:flex-start"><span class="dot"></span>대기</span></div>
+      <div class="card ov"><span class="lbl">센서 ΔR/R₀</span><div><span class="num" id="csOvSensor">—</span></div><span class="pill mute" id="csOvSensorState" style="align-self:flex-start"><span class="dot"></span>대기</span></div>
+      <div class="card ov"><span class="lbl">펌프 1 · 2</span><div><span class="num" id="csOvPumps">—</span></div><span class="pill mute" id="csOvPumpsState" style="align-self:flex-start"><span class="dot"></span>대기</span></div>
+      <div class="card ov"><span class="lbl">음성 비서</span><div><span class="num" id="csOvVoice">대기 중</span></div><span class="pill mute" id="csOvVoiceState" style="align-self:flex-start"><span class="dot"></span>LLM 확인 중</span></div>
+    </section>
+
+    <section class="cols2">
+      <div class="card" id="clinostat">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="#2DD4BF" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><ellipse cx="12" cy="12" rx="9" ry="3.5"></ellipse></svg>클리노스텟 관제 <span class="pill mute" id="csClinoStrategy"><span class="dot"></span>정지</span></h2>
+        <div class="grid4">
+          <div class="kv"><span class="lbl">경과</span><div><span class="num" id="csClinoElapsed">0</span><span class="unit">s</span></div></div>
+          <div class="kv"><span class="lbl">AC (외측)</span><div><span class="num" id="csClinoOuter">0.0</span><span class="unit">rpm</span></div></div>
+          <div class="kv"><span class="lbl">BLDC (내측)</span><div><span class="num" id="csClinoInner">0.0</span><span class="unit">rpm</span></div></div>
+          <div class="kv"><span class="lbl">시간평균 g (실측)</span><div><span class="num" id="csClinoTasmg">—</span><span class="unit">g</span></div></div>
+        </div>
+        <div class="kv"><span class="lbl">전략 파라미터</span><div class="log" id="csClinoParams">—</div></div>
+        <div class="grid2">
+          <div class="kv"><label class="lbl" for="csStrategySelect">운전 조건</label><select class="input" id="csStrategySelect"><option value="">(불러오는 중)</option></select></div>
+          <label class="chk" for="csSupervisionAck"><input type="checkbox" id="csSupervisionAck">감독자 입회 + IMU sample_platform 장착 확인</label>
+        </div>
+        <div class="row">
+          <button class="btn primary" type="button" id="csClinoStart">조건 적용 후 시작</button>
+          <button class="btn" type="button" id="csClinoStop">정지</button>
+        </div>
+      </div>
+
+      <div class="card" id="sensor">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="#2DD4BF" stroke-width="2" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>저항센서 신호 <span class="pill mute" id="csSensorState"><span class="dot"></span>idle</span></h2>
+        <div class="grid4">
+          <div class="kv"><span class="lbl">ΔR/R₀</span><div><span class="num" id="csSensorDelta">—</span></div></div>
+          <div class="kv"><span class="lbl">저항</span><div><span class="num" id="csSensorOhm">—</span><span class="unit">Ω</span></div></div>
+          <div class="kv"><span class="lbl">온도</span><div><span class="num" id="csSensorTemp">—</span><span class="unit">°C</span></div></div>
+          <div class="kv"><span class="lbl">raw ADC</span><div><span class="num" id="csSensorAdc">—</span></div></div>
+        </div>
+        <svg class="spark" viewBox="0 0 520 120" preserveAspectRatio="none" role="img" aria-label="ΔR/R₀ 최근 120초">
+          <path d="M0 90 H520" stroke="#1E2A44" stroke-width="1"></path>
+          <path d="M0 60 H520" stroke="#1E2A44" stroke-width="1" stroke-dasharray="4 4"></path>
+          <path d="M0 30 H520" stroke="#1E2A44" stroke-width="1"></path>
+          <path id="csSensorFill" d="" fill="#2DD4BF" opacity=".08"></path>
+          <path id="csSensorPath" d="" fill="none" stroke="#2DD4BF" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+        </svg>
+        <div class="row">
+          <span class="pill mute" id="csSensorRref"><span class="dot"></span>Rref —</span>
+          <span class="pill mute" id="csSensorBattery"><span class="dot"></span>배터리 —</span>
+          <input class="input" id="csExperimentName" type="text" placeholder="실험명 (영숫자, 세션 꼬리표)" style="width:220px;flex:1">
+          <button class="btn primary" type="button" id="csSensorStart">측정 시작</button>
+          <button class="btn" type="button" id="csSensorStop">정지</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="cols3" id="pumps">
+      <div id="csPumpCards" style="display:contents"></div>
+      <div class="card estim" id="csEstimCard">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="#8B97B3" stroke-width="2" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"></path></svg>전기신호 제어 <span class="pill mute"><span class="dot"></span>준비 중</span></h2>
+        <div style="font-size:13px;line-height:1.55;color:var(--mute)" id="estim">자극 장치가 연결되면 이 카드가 활성화됩니다. 아래 항목은 자리만 잡아 둔 것입니다.</div>
+        <div class="grid2">
+          <div class="kv"><label class="lbl" for="csEstimChannel">채널</label><input class="input" id="csEstimChannel" type="text" value="—" disabled></div>
+          <div class="kv"><label class="lbl" for="csEstimWave">파형</label><input class="input" id="csEstimWave" type="text" value="—" disabled></div>
+          <div class="kv"><label class="lbl" for="csEstimAmp">진폭 (mA)</label><input class="input" id="csEstimAmp" type="number" disabled></div>
+          <div class="kv"><label class="lbl" for="csEstimHz">주파수 (Hz)</label><input class="input" id="csEstimHz" type="number" disabled></div>
+        </div>
+        <div class="row">
+          <button class="btn" type="button" id="csEstimApply" disabled style="flex:1">자극 적용</button>
+          <button class="btn" type="button" id="csEstimStop" disabled>정지</button>
+        </div>
+        <div class="log">[장치 미정] 프로토콜·안전 한계 결정 후 연결</div>
+      </div>
+    </section>
+
+    <section class="cols2">
+      <div class="card voice" id="voice">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="#2DD4BF" stroke-width="2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>음성 비서 · 상황 보고 <span class="pill mute" id="csMicState"><span class="dot"></span>대기 중</span></h2>
+        <div style="display:flex;gap:18px;align-items:center">
+          <button type="button" class="mic" id="csMicBtn" aria-label="음성 명령 듣기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>
+          </button>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px">
+            <svg class="bars" id="csVoiceBars" viewBox="0 0 400 48" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <div style="font-size:13px;color:var(--text2)" id="csMicHint">마이크를 누르고 말하세요. 예: "펌프 2 400헤르츠 5초", "클리노스텟 정지", "지금 상태 알려 줘"</div>
+            <div class="row">
+              <button class="btn" type="button" id="csSummaryBtn">상황 요약 듣기</button>
+              <label class="chk" for="csTtsToggle" style="min-height:44px"><input type="checkbox" id="csTtsToggle" checked>음성으로 읽기</label>
+            </div>
+          </div>
+        </div>
+        <div class="chat" id="csTranscript">
+          <div class="bubble sys">명령은 서버 규칙으로 해석되고, 장치를 움직이는 명령은 [실행]을 눌러야 보냅니다. 그 밖의 질문은 온보드 LLM 이 답합니다.</div>
+        </div>
+        <div class="confirm" id="csConfirmBar">
+          <button class="btn primary" type="button" id="csConfirmRun" style="height:40px">실행</button>
+          <button class="btn" type="button" id="csConfirmCancel" style="height:40px">취소</button>
+        </div>
+        <div class="row">
+          <input class="input" id="csTextInput" type="text" placeholder="글로 입력해도 됩니다" style="flex:1;min-width:200px">
+          <button class="btn" type="button" id="csTextSend">보내기</button>
+        </div>
+      </div>
+
+      <div class="card" id="session">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="#2DD4BF" stroke-width="2" aria-hidden="true"><path d="M4 4h16v16H4z"></path><path d="M8 9h8M8 13h5"></path></svg>이벤트 로그 <span class="pill mute"><span class="dot"></span>최근 60건</span></h2>
+        <div class="err" id="csGatewayError"></div>
+        <div class="log events" id="csEventLog"></div>
+        <div class="row" style="margin-top:auto">
+          <a class="btn" id="csSessionsLink" href="/#spacebioPanel">세션 목록 (기존 화면)</a>
+          <button class="btn" type="button" id="csSessionFinish">세션 종료</button>
+          <div class="row" style="margin-left:auto">
+            <button class="btn danger" type="button" id="csPumpEstop">펌프 비상 정지</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="pill mute" id="csEstopSummary"><span class="dot"></span>비상정지 해제됨</span>
+          <input class="input" id="csEstopAck" type="text" placeholder="해제 확인 문구" style="flex:1;min-width:160px">
+          <button class="btn" type="button" id="csPumpEstopReset" disabled>비상정지 해제</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<template id="csPumpCardTemplate">
+  <div class="card">
+    <h2><svg viewBox="0 0 24 24" fill="none" stroke="#F5B542" stroke-width="2" aria-hidden="true"><path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z"></path></svg>펌프 <span data-f="pumpTitle">1</span> <span class="pill mute" data-f="pumpState"><span class="dot"></span>—</span></h2>
+    <div class="grid2">
+      <div class="kv"><span class="lbl">위치</span><div><span class="num" data-f="pumpPosition">—</span><span class="unit">step</span></div></div>
+      <div class="kv"><span class="lbl">마지막 운전</span><div><span class="num" data-f="pumpLast">—</span></div></div>
+    </div>
+    <div class="grid2">
+      <div class="kv"><label class="lbl" data-for="pumpRunHz">주파수 (Hz)</label><input class="input" data-f="pumpRunHz" type="number" value="600" min="1" max="1000" step="1"></div>
+      <div class="kv"><label class="lbl" data-for="pumpRunSec">구동 시간 (초)</label><input class="input" data-f="pumpRunSec" type="number" value="10" min="1" step="1"></div>
+    </div>
+    <div class="row">
+      <button class="btn primary" type="button" data-f="pumpRunBtn" style="flex:1">주파수로 구동</button>
+      <button class="btn" type="button" data-f="pumpStop">정지</button>
+    </div>
+    <div class="row"><span class="pill mute" data-f="pumpMode"><span class="dot"></span>—</span><span class="pill mute" data-f="pumpLatched"><span class="dot"></span>해제됨</span></div>
+  </div>
+</template>
+
+<script>
+'use strict';
+// ─────────────────────────── 공용 ───────────────────────────
+const $ = (id) => document.getElementById(id);
+// 기존 화면(index.html)과 같은 안전 확인 토큰·기본 속도 설정. 값이 다르면 서버가 거부하거나 다른 운전이 된다.
+const SUPERVISION_ACK_TOKEN = 'HUMAN_SUPERVISED_LIVE_MOTION';
+const IMU_MOUNT_CONFIRMATION_TOKEN = 'HUMAN_CONFIRMED_SAMPLE_PLATFORM';
+const DEFAULT_CONTROL_CONFIG = {
+  outer: { enabled: false, func_type: 'constant', base_speed: 5, amplitude: 0, period: 10 },
+  inner: { enabled: false, func_type: 'constant', base_speed: 20, amplitude: 0, period: 10 },
+};
+// 게이트웨이 PUMP_SPM_MAX 60000 과 펌웨어 SPM_MAX 가 같은 값이다.
+const PUMP_RUN_HZ_MAX = 1000;
+const SPACEBIO_ESTOP_ACK = 'RESET ESTOP';
+const STALE_MS = 5000;
+const SPARK_POINTS = 120;
+
+const FRIENDLY = {
+  sensor_conflict: '측정이 이미 실행 중입니다. 먼저 정지하세요.',
+  conflict: '세션이 이미 열려 있습니다. 세션 종료를 먼저 누르세요.',
+  validation_error: '요청 값이 올바르지 않습니다.',
+  pump_offline: '펌프 보드가 브로커에 연결돼 있지 않습니다.',
+  pump_estop_latched: '비상정지가 걸려 있습니다. 확인 문구를 입력하고 [비상정지 해제]를 누르세요.',
+  pump_backend_unsupported: '스텝 명령은 무선(실기) 펌프에서만 동작합니다.',
+  pump_conflict: '펌프가 명령을 받을 수 없는 상태입니다.',
+  gateway_unreachable: 'Gateway 응답이 없습니다. 잠시 후 다시 시도하세요.',
+};
+
+async function api(method, path, body) {
+  const init = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const res = await fetch(path, init);
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = (payload && payload.error) || { code: 'error', message: res.statusText };
+    const friendly = FRIENDLY[err.code] || (err.code + ': ' + err.message);
+    $('csGatewayError').textContent = friendly;
+    log('오류 ' + res.status + ' — ' + friendly);
+    throw new Error(err.code);
+  }
+  $('csGatewayError').textContent = '';
+  return payload;
+}
+
+function log(message) {
+  const host = $('csEventLog');
+  const row = document.createElement('div');
+  const b = document.createElement('b');
+  b.textContent = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+  row.appendChild(b);
+  row.appendChild(document.createTextNode(' ' + message));
+  host.prepend(row);
+  while (host.childElementCount > 60) host.lastElementChild.remove();
+}
+
+function setPill(el, cls, text) {
+  el.className = 'pill ' + cls;
+  el.replaceChildren(Object.assign(document.createElement('span'), { className: 'dot' }), document.createTextNode(text));
+}
+
+function tickClock() {
+  $('csClock').textContent = new Date().toLocaleString('ko-KR', { hour12: false });
+}
+
+// ─────────────────────────── 클리노스텟 (/ws) ───────────────────────────
+let clinoWs = null;
+let clinoLastSeen = 0;
+let clinoRunning = false;
+
+function connectClinostatWs() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  clinoWs = new WebSocket(proto + '//' + location.host + '/ws');
+  clinoWs.onopen = () => setPill($('csChipPi'), 'ok', 'Pi clinostat');
+  clinoWs.onmessage = (event) => renderClinostat(JSON.parse(event.data));
+  clinoWs.onclose = () => { setPill($('csChipPi'), 'bad', 'Pi 끊김'); setTimeout(connectClinostatWs, 2000); };
+  clinoWs.onerror = () => clinoWs && clinoWs.close();
+}
+
+function renderClinostat(d) {
+  clinoLastSeen = Date.now();
+  clinoRunning = !!d.running;
+  const outer = (d.outer_actual !== undefined && d.outer_actual !== 0) ? d.outer_actual : (d.outer_rpm || 0);
+  const inner = (d.inner_actual !== undefined && d.inner_actual !== 0) ? d.inner_actual : (d.inner_rpm || 0);
+  $('csClinoElapsed').textContent = Number(d.elapsed || 0).toFixed(0);
+  $('csClinoOuter').textContent = Number(outer).toFixed(1);
+  $('csClinoInner').textContent = Number(inner).toFixed(1);
+  const g = (d.metrics_meas || {}).tasmg_G;
+  $('csClinoTasmg').textContent = typeof g === 'number' ? g.toFixed(4) : '—';
+  const name = d.strategy_name || (d.running ? '수동' : '');
+  setPill($('csClinoStrategy'), d.running ? 'ok' : 'mute', d.running ? 'RUNNING · ' + name : '정지');
+  const params = d.strategy_params || {};
+  const keys = Object.keys(params);
+  $('csClinoParams').textContent = keys.length ? keys.map((k) => k + ' ' + params[k]).join(' · ') : '—';
+  $('csOvStrategy').textContent = name || '정지';
+  setPill($('csOvStrategyState'), d.running ? 'ok' : 'mute', d.running ? 'RUNNING ' + fmtElapsed(d.elapsed) : '정지');
+}
+
+function fmtElapsed(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const pad = (n) => String(n).padStart(2, '0');
+  return pad(Math.floor(s / 3600)) + ':' + pad(Math.floor((s % 3600) / 60)) + ':' + pad(s % 60);
+}
+
+async function loadStrategies() {
+  const r = await api('GET', '/api/strategies');
+  const select = $('csStrategySelect');
+  select.replaceChildren(new Option('(조건 없음 — 현재 설정 유지)', ''));
+  (r.strategies || []).forEach((s) => select.add(new Option(s.name + (s.description ? ' — ' + s.description : ''), s.name)));
+  if (r.current) select.value = r.current;
+}
+
+async function clinostatStart() {
+  if (!$('csSupervisionAck').checked) {
+    log('안전 확인 체크박스를 먼저 체크하세요 (감독자 입회 + IMU sample_platform 장착)');
+    return false;
+  }
+  const name = $('csStrategySelect').value;
+  if (name) {
+    const r = await api('POST', '/api/strategy', { name, params: {} });
+    if (!r.ok) { log('조건 적용 실패: ' + r.error); return false; }
+  }
+  const body = {
+    ...DEFAULT_CONTROL_CONFIG,
+    supervision_ack: true,
+    supervision_token: SUPERVISION_ACK_TOKEN,
+    supervisor: 'operator',
+    imu_mount_location: 'sample_platform',
+    imu_mount_confirmation: IMU_MOUNT_CONFIRMATION_TOKEN,
+  };
+  const r = await api('POST', '/api/control/start', body);
+  if (!r.ok) { log('클리노스텟 시작 실패: ' + (r.error || '원인 미상')); return false; }
+  log('클리노스텟 시작' + (name ? ' — ' + name : ''));
+  return true;
+}
+
+async function clinostatStop() {
+  await api('POST', '/api/control/stop');
+  log('클리노스텟 정지');
+}
+
+// ─────────────────────────── SpaceBio (/ws/spacebio) ───────────────────────────
+let sbWs = null;
+let sbLastSeen = 0;
+let sbLastSequence = null;
+let sessionState = 'idle';
+let sensorState = 'idle';
+let latestPumps = [];
+const sparkBuffer = [];
+
+function connectSpacebioWs() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  sbWs = new WebSocket(proto + '//' + location.host + '/ws/spacebio');
+  sbWs.onmessage = async (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type !== 'status') return;
+    if (sbLastSequence !== null && message.sequence > sbLastSequence + 1) {
+      try { renderStatus(await api('GET', '/api/spacebio/status')); } catch (err) { /* stale 감시자가 처리 */ }
+    }
+    sbLastSequence = message.sequence;
+    renderStatus(message.data);
+  };
+  sbWs.onclose = () => setTimeout(connectSpacebioWs, 2000);
+  sbWs.onerror = () => sbWs && sbWs.close();
+}
+
+function renderStatus(status) {
+  if (!status) return;
+  sbLastSeen = Date.now();
+  const gw = (status.gateway || {}).state || 'unknown';
+  setPill($('csChipGateway'), gw === 'online' ? 'ok' : 'warn', 'Gateway ' + gw);
+
+  const session = status.session || {};
+  sessionState = session.state || 'idle';
+  $('csSessionId').textContent = session.session_id || '-';
+  $('csSessionState').textContent = sessionState;
+
+  renderSensor(status.sensor || {});
+  const pumps = (status.pumps && status.pumps.length) ? status.pumps : [status.pump || {}];
+  latestPumps = pumps;
+  ensurePumpCards(pumps);
+  pumps.forEach(renderPump);
+  renderPumpOverview(pumps);
+  const anyLatched = pumps.some((p) => !!p.estop_latched);
+  setPill($('csEstopSummary'), anyLatched ? 'bad' : 'mute', anyLatched ? '비상정지 래치됨 — 해제 필요' : '비상정지 해제됨');
+  syncEstopReset();
+}
+
+function renderSensor(sensor) {
+  sensorState = sensor.state || 'idle';
+  const live = ['running', 'recording', 'measuring'].includes(sensorState);
+  const bleCls = live ? 'ok' : (sensorState === 'error' ? 'bad' : 'mute');
+  setPill($('csSensorState'), bleCls, sensorState + (sensor.mode ? ' · ' + sensor.mode : ''));
+  setPill($('csChipBle'), bleCls, live ? 'BLE 측정 중' : 'BLE 센서 ' + sensorState);
+  setPill($('csSensorRref'), sensor.rref_ohm != null ? 'ok' : 'mute',
+    'Rref ' + (sensor.rref_ohm != null ? (sensor.rref_ohm / 1000).toFixed(1) + ' kΩ' : '—')
+    + (sensor.avg_factor ? ' · 평균 N=' + sensor.avg_factor : ''));
+  const sample = sensor.sample;
+  if (sample) {
+    $('csSensorDelta').textContent = Number(sample.delta_r_over_r0).toFixed(4);
+    $('csSensorOhm').textContent = Number(sample.resistance_ohm).toFixed(1);
+    $('csSensorTemp').textContent = Number(sample.temperature_c).toFixed(1);
+    $('csSensorAdc').textContent = (sample.raw_adc === null || sample.raw_adc === undefined) ? '—' : sample.raw_adc;
+    setPill($('csSensorBattery'), 'mute', '배터리 ' + (sample.battery_pct != null ? sample.battery_pct + '%' : '—'));
+    pushSpark(Number(sample.delta_r_over_r0));
+    $('csOvSensor').textContent = Number(sample.delta_r_over_r0).toFixed(4);
+  }
+  setPill($('csOvSensorState'), bleCls, live ? '측정 중' : sensorState);
+}
+
+function pushSpark(value) {
+  if (!Number.isFinite(value)) return;
+  if (sparkBuffer.length && sparkBuffer[sparkBuffer.length - 1] === value) return;
+  sparkBuffer.push(value);
+  while (sparkBuffer.length > SPARK_POINTS) sparkBuffer.shift();
+  const min = Math.min(...sparkBuffer), max = Math.max(...sparkBuffer);
+  const span = (max - min) || 1e-9;
+  const step = 520 / Math.max(1, SPARK_POINTS - 1);
+  const pts = sparkBuffer.map((v, i) => [i * step, 110 - ((v - min) / span) * 100]);
+  const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  $('csSensorPath').setAttribute('d', line);
+  $('csSensorFill').setAttribute('d', pts.length ? line + ' V120 H0 Z' : '');
+}
+
+function sessionId() {
+  const stamp = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  // 서버 형식: ^spacebio_\d{8}_\d{6}_[A-Za-z0-9]+$ — 꼬리표는 영숫자만.
+  const tag = ($('csExperimentName').value || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 24)
+    || Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 4) || 'run';
+  return 'spacebio_' + stamp.getFullYear() + pad(stamp.getMonth() + 1) + pad(stamp.getDate()) + '_'
+    + pad(stamp.getHours()) + pad(stamp.getMinutes()) + pad(stamp.getSeconds()) + '_' + tag;
+}
+
+async function sensorStart() {
+  if (sessionState !== 'recording') {
+    const sid = sessionId();
+    await api('POST', '/api/spacebio/session/start', {
+      session_id: sid, experiment_name: $('csExperimentName').value, started_at: new Date().toISOString() });
+    log('세션 시작: ' + sid);
+  }
+  await api('POST', '/api/spacebio/sensor/configure', { mode: 'BLE_LIVE' });
+  await api('POST', '/api/spacebio/sensor/start', {});
+  sparkBuffer.length = 0;
+  log('측정 시작 — 기록 중');
+}
+
+async function sensorStop() {
+  await api('POST', '/api/spacebio/sensor/stop', {});
+  const finished = await finishSession();
+  log(finished ? '측정 정지 — 기록 저장 (' + finished + ')' : '측정 정지');
+}
+
+async function finishSession() {
+  const current = $('csSessionId').textContent;
+  if (sessionState !== 'recording' || !current || current === '-') return null;
+  await api('POST', '/api/spacebio/session/finish', {
+    session_id: current, finished_at: new Date().toISOString(), clinostat_run_id: null });
+  return current;
+}
+
+// ─────────────────────────── 펌프 ───────────────────────────
+const pumpLastRun = {};
+
+function pumpEl(pid, name) {
+  return document.querySelector('[data-pump="' + pid + '"] [data-f="' + name + '"]');
+}
+
+function ensurePumpCards(pumps) {
+  const host = $('csPumpCards');
+  const wanted = pumps.map((p) => String(p.pump_id || 1));
+  const existing = Array.from(host.children).map((c) => c.dataset.pump);
+  if (existing.length === wanted.length && existing.every((id, i) => id === wanted[i])) return;
+  host.replaceChildren(...wanted.map(buildPumpCard));
+}
+
+function buildPumpCard(pid) {
+  const card = $('csPumpCardTemplate').content.firstElementChild.cloneNode(true);
+  card.dataset.pump = pid;
+  card.querySelectorAll('[data-f]').forEach((el) => { if (el.tagName === 'INPUT') el.id = el.dataset.f + '-' + pid; });
+  card.querySelectorAll('[data-for]').forEach((el) => { el.htmlFor = el.dataset.for + '-' + pid; });
+  const f = (name) => card.querySelector('[data-f="' + name + '"]');
+  const pumpId = Number(pid);
+  f('pumpTitle').textContent = pid;
+  f('pumpRunBtn').onclick = () => runPumpHz(pumpId, Number(f('pumpRunHz').value), Number(f('pumpRunSec').value));
+  f('pumpStop').onclick = () => pumpStop(pumpId);
+  return card;
+}
+
+function renderPump(pump) {
+  const pid = String(pump.pump_id || 1);
+  if (!pumpEl(pid, 'pumpState')) return;
+  const state = String(pump.state || '—');
+  const idle = ['IDLE', 'STOPPED'].includes(state.toUpperCase());
+  const offline = state.toUpperCase() === 'OFFLINE';
+  setPill(pumpEl(pid, 'pumpState'), offline ? 'bad' : (idle ? 'ok' : 'warn'), state);
+  if (pump.mode) setPill(pumpEl(pid, 'pumpMode'), pump.mode === 'WIRELESS' ? 'ok' : 'mute', pump.mode === 'WIRELESS' ? '무선 실측' : '모의');
+  setPill(pumpEl(pid, 'pumpLatched'), pump.estop_latched ? 'bad' : 'mute', pump.estop_latched ? '래치됨' : '해제됨');
+  if (pump.position_steps !== undefined && pump.position_steps !== null) {
+    pumpEl(pid, 'pumpPosition').textContent = Number(pump.position_steps).toLocaleString('ko-KR');
+  }
+  pumpEl(pid, 'pumpLast').textContent = pumpLastRun[pid] || '—';
+}
+
+function renderPumpOverview(pumps) {
+  const states = pumps.map((p) => String(p.state || '—').toUpperCase());
+  const anyRunning = states.some((s) => !['IDLE', 'STOPPED', 'OFFLINE', '—'].includes(s));
+  const anyOffline = states.some((s) => s === 'OFFLINE');
+  $('csOvPumps').textContent = states.join(' · ');
+  setPill($('csOvPumpsState'), anyOffline ? 'bad' : (anyRunning ? 'warn' : 'ok'), anyOffline ? '보드 오프라인' : (anyRunning ? '운전 중' : '정지 · 무선'));
+  setPill($('csChipBoard'), anyOffline ? 'bad' : 'ok', anyOffline ? 'ESP32 오프라인' : 'ESP32 온라인');
+}
+
+async function runPumpHz(pumpId, hz, sec) {
+  if (!(hz >= 1 && hz <= PUMP_RUN_HZ_MAX) || !(sec >= 1)) {
+    log('펌프 ' + pumpId + ' 주파수는 1~' + PUMP_RUN_HZ_MAX + ' Hz, 시간은 1초 이상이어야 합니다');
+    return;
+  }
+  await api('POST', '/api/spacebio/pump/step', {
+    pump_id: pumpId, steps: Math.round(hz * sec), spm: Math.round(hz * 60) });
+  pumpLastRun[String(pumpId)] = hz + ' Hz · ' + sec + ' s';
+  log('펌프 ' + pumpId + ' ' + hz + 'Hz ' + sec + '초 구동');
+}
+
+async function pumpStop(pumpId) {
+  await api('POST', '/api/spacebio/pump/stop', pumpId ? { pump_id: pumpId } : {});
+  log(pumpId ? '펌프 ' + pumpId + ' 정지' : '모든 펌프 정지');
+}
+
+async function pumpEmergencyStop() {
+  await api('POST', '/api/spacebio/pump/emergency-stop', {});
+  log('비상 정지 — 모든 펌프 래치됨');
+}
+
+async function pumpResetEstop() {
+  await api('POST', '/api/spacebio/pump/reset-emergency-stop', { acknowledgement: $('csEstopAck').value });
+  $('csEstopAck').value = '';
+  syncEstopReset();
+  log('비상정지 해제됨 — 모든 펌프');
+}
+
+function syncEstopReset() {
+  $('csPumpEstopReset').disabled = $('csEstopAck').value.trim() !== SPACEBIO_ESTOP_ACK;
+}
+
+async function stopAll() {
+  // 클리노스텟 정지가 항상 먼저. 펌프 정지는 그 결과와 무관하게 이어진다.
+  let clinostatOk = true, pumpOk = true;
+  try { await api('POST', '/api/control/stop'); } catch (err) { clinostatOk = false; }
+  try { await api('POST', '/api/spacebio/pump/stop', {}); } catch (err) { pumpOk = false; }
+  log('전체 정지 — 클리노스텟 ' + (clinostatOk ? 'OK' : '실패') + ' / 펌프 ' + (pumpOk ? 'OK' : '실패'));
+}
+
+// ─────────────────────────── 음성 비서 ───────────────────────────
+let recognition = null;
+let listening = false;
+let pendingAction = null;
+let barsTimer = null;
+
+function initVoiceBars() {
+  const svg = $('csVoiceBars');
+  for (let i = 0; i < 40; i += 1) {
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', String(i * 10)); rect.setAttribute('width', '6'); rect.setAttribute('rx', '3');
+    rect.setAttribute('y', '21'); rect.setAttribute('height', '6');
+    svg.appendChild(rect);
+  }
+}
+
+function animateBars(on) {
+  clearInterval(barsTimer);
+  const rects = $('csVoiceBars').querySelectorAll('rect');
+  const draw = () => rects.forEach((r) => {
+    const h = on ? 6 + Math.random() * 34 : 6;
+    r.setAttribute('height', h.toFixed(1)); r.setAttribute('y', (24 - h / 2).toFixed(1));
+    r.style.opacity = on ? '0.7' : '0.35';
+  });
+  draw();
+  if (on) barsTimer = setInterval(draw, 120);
+}
+
+function initSpeech() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    $('csMicHint').textContent = '이 브라우저는 음성 인식을 지원하지 않습니다 (Chrome 권장). 아래 입력창으로 명령하세요.';
+    $('csMicBtn').disabled = true;
+    return;
+  }
+  recognition = new SR();
+  recognition.lang = 'ko-KR';
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  recognition.onstart = () => setListening(true);
+  recognition.onend = () => setListening(false);
+  recognition.onerror = (ev) => { log('음성 인식 오류: ' + ev.error); setListening(false); };
+  recognition.onresult = (ev) => {
+    let interim = '', finalText = '';
+    for (let i = ev.resultIndex; i < ev.results.length; i += 1) {
+      const chunk = ev.results[i][0].transcript;
+      if (ev.results[i].isFinal) finalText += chunk; else interim += chunk;
+    }
+    if (interim) $('csMicHint').textContent = '듣는 중… ' + interim;
+    if (finalText.trim()) sendCommand(finalText.trim());
+  };
+}
+
+function setListening(on) {
+  listening = on;
+  $('csMicBtn').classList.toggle('on', on);
+  setPill($('csMicState'), on ? 'ok' : 'mute', on ? '듣는 중' : '대기 중');
+  $('csOvVoice').textContent = on ? '듣는 중' : '대기 중';
+  if (!on) $('csMicHint').textContent = '마이크를 누르고 말하세요. 예: "펌프 2 400헤르츠 5초", "클리노스텟 정지", "지금 상태 알려 줘"';
+  animateBars(on);
+}
+
+function toggleMic() {
+  if (!recognition) return;
+  if (listening) { recognition.stop(); return; }
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  try { recognition.start(); } catch (err) { log('마이크를 열 수 없습니다: ' + err.message); }
+}
+
+function bubble(kind, text) {
+  const host = $('csTranscript');
+  const el = document.createElement('div');
+  el.className = 'bubble ' + kind;
+  el.textContent = text;
+  host.appendChild(el);
+  while (host.childElementCount > 40) host.firstElementChild.remove();
+  host.scrollTop = host.scrollHeight;
+  return el;
+}
+
+function speak(text) {
+  if (!$('csTtsToggle').checked || !window.speechSynthesis || !text) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'ko-KR';
+  const voice = window.speechSynthesis.getVoices().find((v) => v.lang && v.lang.replace('_', '-').startsWith('ko'));
+  if (voice) utter.voice = voice;
+  utter.rate = 1.05;
+  window.speechSynthesis.speak(utter);
+}
+
+async function sendCommand(text) {
+  bubble('me', text);
+  const thinking = bubble('sys', '해석 중…');
+  try {
+    const data = await api('POST', '/api/assistant/command', { text });
+    thinking.remove();
+    await handleAssistantReply(data);
+  } catch (err) {
+    thinking.textContent = '서버 오류: ' + err.message;
+  }
+}
+
+async function handleAssistantReply(data) {
+  const action = data.action;
+  const source = data.source === 'llm' ? 'LLM ' + (data.llm_host || '') + (data.latency_ms ? ' · ' + (data.latency_ms / 1000).toFixed(1) + ' s' : '')
+    : (data.source === 'rule' ? '규칙' : '응답 없음');
+  bubble('ai', data.reply);
+  bubble('sys', source);
+  speak(data.reply);
+  log('음성 · "' + data.text + '" → ' + (action ? action.kind : 'LLM 응답') + ' (' + source + ')');
+  if (!action || action.kind === 'invalid' || action.kind === 'status') { showConfirm(null); return; }
+  if (action.requires_confirm) { showConfirm(action); return; }
+  await executeAction(action);
+}
+
+function showConfirm(action) {
+  pendingAction = action;
+  $('csConfirmBar').classList.toggle('show', !!action);
+}
+
+async function executeAction(action) {
+  showConfirm(null);
+  const p = action.params || {};
+  try {
+    switch (action.kind) {
+      case 'pump_run': await runPumpHz(p.pump_id, p.hz, p.sec); break;
+      case 'pump_stop': await pumpStop(p.pump_id); break;
+      case 'clinostat_stop': await clinostatStop(); break;
+      case 'clinostat_start': await clinostatStart(); break;
+      case 'stop_all': await stopAll(); break;
+      case 'estop': await pumpEmergencyStop(); break;
+      case 'sensor_start': await sensorStart(); break;
+      case 'sensor_stop': await sensorStop(); break;
+      case 'status': break;
+      default: log('알 수 없는 명령 종류: ' + action.kind);
+    }
+    bubble('sys', '실행함 — ' + action.summary);
+  } catch (err) {
+    bubble('sys', '실행 실패 — ' + ($('csGatewayError').textContent || err.message));
+    speak('실행하지 못했습니다. ' + $('csGatewayError').textContent);
+  }
+}
+
+async function requestSummary() {
+  const thinking = bubble('sys', '상황 요약 생성 중…');
+  try {
+    const data = await api('POST', '/api/assistant/summary');
+    thinking.remove();
+    await handleAssistantReply({ ...data, text: '상황 요약', action: { kind: 'status' } });
+  } catch (err) {
+    thinking.textContent = '요약 실패: ' + err.message;
+  }
+}
+
+async function probeLlm() {
+  try {
+    const data = await api('GET', '/api/assistant/status');
+    const up = (data.hosts || []).find((h) => h.reachable);
+    const text = up ? 'LLM ' + up.name + ' · ' + up.model : 'LLM 없음 — 규칙 요약';
+    setPill($('csChipLlm'), up ? 'ok' : 'warn', text);
+    setPill($('csOvVoiceState'), up ? 'ok' : 'warn', up ? up.name + ' · TTS ' + ($('csTtsToggle').checked ? '켜짐' : '꺼짐') : '규칙 요약만');
+  } catch (err) {
+    setPill($('csChipLlm'), 'bad', 'LLM 상태 불명');
+  }
+}
+
+// ─────────────────────────── 시작 ───────────────────────────
+function watchStale() {
+  const stale = Date.now() - sbLastSeen > STALE_MS;
+  document.body.classList.toggle('stale', stale);
+  if (stale) setPill($('csChipGateway'), 'bad', 'Gateway 응답 없음');
+}
+
+function bind() {
+  $('csStopAll').onclick = stopAll;
+  $('csClinoStart').onclick = () => clinostatStart().catch(() => {});
+  $('csClinoStop').onclick = () => clinostatStop().catch(() => {});
+  $('csSensorStart').onclick = () => sensorStart().catch(() => {});
+  $('csSensorStop').onclick = () => sensorStop().catch(() => {});
+  $('csSessionFinish').onclick = async () => { const f = await finishSession().catch(() => null); log(f ? '세션 종료: ' + f : '열린 세션 없음'); };
+  $('csPumpEstop').onclick = () => pumpEmergencyStop().catch(() => {});
+  $('csPumpEstopReset').onclick = () => pumpResetEstop().catch(() => {});
+  $('csEstopAck').addEventListener('input', syncEstopReset);
+  $('csEstopAck').placeholder = SPACEBIO_ESTOP_ACK;
+  $('csMicBtn').onclick = toggleMic;
+  $('csSummaryBtn').onclick = requestSummary;
+  $('csConfirmRun').onclick = () => { if (pendingAction) executeAction(pendingAction); };
+  $('csConfirmCancel').onclick = () => { bubble('sys', '취소함'); showConfirm(null); };
+  $('csTtsToggle').onchange = probeLlm;
+  const sendTyped = () => { const t = $('csTextInput').value.trim(); if (!t) return; $('csTextInput').value = ''; sendCommand(t); };
+  $('csTextSend').onclick = sendTyped;
+  $('csTextInput').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') sendTyped(); });
+}
+
+async function init() {
+  bind();
+  initVoiceBars();
+  initSpeech();
+  tickClock();
+  setInterval(tickClock, 1000);
+  setInterval(watchStale, 1000);
+  setInterval(probeLlm, 60000);
+  connectClinostatWs();
+  connectSpacebioWs();
+  loadStrategies().catch(() => log('운전 조건 목록을 불러오지 못했습니다'));
+  probeLlm();
+  try { renderStatus(await api('GET', '/api/spacebio/status')); } catch (err) { /* stale 감시자가 표시 */ }
+  if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = () => {};
+}
+
+window.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

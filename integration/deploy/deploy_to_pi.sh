@@ -33,7 +33,9 @@ declare -a EXTENSION_PAIRS=(
   "clinostat_extension/work/camera.py:$CLINOSTAT_ROOT/camera.py"
   "clinostat_extension/work/server.py:$CLINOSTAT_ROOT/server.py"
   "clinostat_extension/work/spacebio_proxy.py:$CLINOSTAT_ROOT/spacebio_proxy.py"
+  "clinostat_extension/work/assistant.py:$CLINOSTAT_ROOT/assistant.py"
   "clinostat_extension/work/static/index.html:$CLINOSTAT_ROOT/static/index.html"
+  "clinostat_extension/work/static/console.html:$CLINOSTAT_ROOT/static/console.html"
 )
 
 say() { printf '==> %s\n' "$*"; }

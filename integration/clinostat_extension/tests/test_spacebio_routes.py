@@ -155,7 +155,7 @@ def test_dashboard_pages_are_served_with_no_cache(source):
     """index.html/mobile.html 의 FileResponse 는 ETag·Last-Modified 만 붙고 Cache-Control 이 없어
     브라우저가 휴리스틱 캐시로 옛 페이지를 보여줬다(2026-10-16 현장: 배포 뒤에도 펌프 카드가
     안 보임). 페이지 핸들러 줄은 baseline 계약으로 못 바꾸므로 미들웨어가 no-cache 를 덧붙인다."""
-    assert 'PAGE_PATHS = {"/", "/m", "/mobile"}' in source
+    assert 'PAGE_PATHS = {"/", "/m", "/mobile", "/console"}' in source
     mw = source[source.index("async def no_cache_pages"):][:400]
     assert '@app.middleware("http")' in source[:source.index("async def no_cache_pages")][-80:]
     assert "request.url.path in PAGE_PATHS" in mw

@@ -48,6 +48,8 @@ from fastapi.responses import JSONResponse
 from fastapi import Request
 import spacebio_proxy
 from spacebio_proxy import ProxyGatewayError, ProxyPathError
+# 통합 관제 콘솔(/console)의 음성 비서 — 규칙 파서 + Tailscale 온보드 LLM (2026-10-17)
+import assistant
 
 
 class CloseableStreamingResponse(StreamingResponse):
@@ -117,6 +119,7 @@ async def lifespan(app: FastAPI):
         base_url=spacebio_proxy.GATEWAY_BASE_URL
     )
     app.state.spacebio = spacebio_proxy.SpaceBioProxy(app.state.spacebio_client)
+    app.state.assistant_llm = assistant.LlmClient()
     yield
     # 종료 시 정리
     # (하드웨어 정지가 항상 먼저다. SpaceBio 클라이언트는 그 뒤에 닫는다.)
@@ -309,7 +312,7 @@ optimizer_runner = OptimizerRunner(
 # no-cache: Cache-Control 이 없으면 브라우저가 Last-Modified 기준 휴리스틱 캐시를 써서
 # 배포 뒤에도 옛 페이지를 보여준다(2026-10-16 현장: 펌프 카드가 안 보임). ETag 재검증이라
 # 304 로 끝나 비용은 없다. 아래 페이지 핸들러는 baseline 그대로 두고 미들웨어로 덧붙인다.
-PAGE_PATHS = {"/", "/m", "/mobile"}
+PAGE_PATHS = {"/", "/m", "/mobile", "/console"}
 
 
 @app.middleware("http")
@@ -329,6 +332,12 @@ async def index():
 @app.get("/mobile")
 async def mobile():
     return FileResponse(str(STATIC_DIR / "mobile.html"))
+
+
+@app.get("/console")
+async def console():
+    """통합 관제 콘솔 — 기존 / 화면은 그대로 두고 별도 페이지로 둔다(baseline 보존)."""
+    return FileResponse(str(STATIC_DIR / "console.html"))
 
 
 # === 시리얼 포트 목록 ===
@@ -1287,6 +1296,75 @@ async def spacebio_ws(ws: WebSocket):
             await asyncio.sleep(0.2)          # 브라우저 중계 5 Hz 상한
     except (WebSocketDisconnect, Exception):
         pass
+
+
+# ============================================================
+#  음성 비서 (/console) — 규칙 파서 + 온보드 LLM
+#  서버는 문장을 해석해 Action 을 **돌려주기만** 한다. 실행은 브라우저가 사용자
+#  확인 뒤 기존 /api/* 로 한다. LLM 응답은 글자일 뿐 명령으로 바뀌지 않는다.
+# ============================================================
+
+class AssistantCommand(BaseModel):
+    text: str
+
+
+async def _assistant_context(request: Request) -> dict:
+    control_state = control.state.to_dict()
+    try:
+        envelope = await request.app.state.spacebio.get("/api/spacebio/status", None)
+        spacebio_status = envelope.get("data", envelope) if isinstance(envelope, dict) else None
+    except (ProxyGatewayError, ProxyPathError, httpx.HTTPError):
+        spacebio_status = None
+    return assistant.build_context(control_state, spacebio_status)
+
+
+async def _assistant_summary(request: Request) -> dict:
+    ctx = await _assistant_context(request)
+    llm = request.app.state.assistant_llm
+    try:
+        reply = await llm.chat(assistant.system_prompt(ctx), "현재 상황을 보고해 줘.")
+        return {"reply": reply.text, "source": "llm", "llm_host": reply.host,
+                "latency_ms": reply.latency_ms, "context": ctx}
+    except assistant.LlmUnavailable as exc:
+        return {"reply": assistant.template_summary(ctx), "source": "rule", "llm_host": None,
+                "llm_error": str(exc), "context": ctx}
+
+
+@app.get("/api/assistant/status")
+async def assistant_status(request: Request):
+    return {"hosts": await request.app.state.assistant_llm.probe(), "stt": "browser"}
+
+
+@app.post("/api/assistant/command")
+async def assistant_command(cmd: AssistantCommand, request: Request):
+    action = assistant.parse_command(cmd.text)
+    if action is not None and action.kind == "status":
+        summary = await _assistant_summary(request)
+        return {"text": cmd.text, "action": assistant.action_to_dict(action), **summary}
+    if action is not None:
+        if action.kind == "invalid":
+            reply = action.summary
+        elif action.requires_confirm:
+            reply = action.summary + ". 화면의 [실행]을 누르면 보냅니다."
+        else:
+            reply = action.summary + " — 바로 실행합니다."
+        return {"text": cmd.text, "action": assistant.action_to_dict(action), "reply": reply,
+                "source": "rule", "llm_host": None}
+    ctx = await _assistant_context(request)
+    try:
+        reply = await request.app.state.assistant_llm.chat(assistant.system_prompt(ctx), cmd.text)
+        return {"text": cmd.text, "action": None, "reply": reply.text, "source": "llm",
+                "llm_host": reply.host, "latency_ms": reply.latency_ms}
+    except assistant.LlmUnavailable as exc:
+        return {"text": cmd.text, "action": None, "source": "none", "llm_host": None,
+                "llm_error": str(exc),
+                "reply": "명령을 알아듣지 못했고 온보드 LLM 도 응답하지 않습니다. "
+                         "'펌프 1 300헤르츠 10초', '전부 정지', '지금 상태'처럼 말해 주세요."}
+
+
+@app.post("/api/assistant/summary")
+async def assistant_summary(request: Request):
+    return await _assistant_summary(request)
 
 
 if __name__ == "__main__":
