@@ -86,7 +86,7 @@ public:
     switch (_mode) {
       case PM_RUN:    return motor().spm;
       case PM_SPINUP: return motor().spinspm;
-      case PM_MANUAL: return SPM_MAX;
+      case PM_MANUAL: return motor().spm;
       case PM_HZ:     return (long)(_targetHz * 60.0f);
       default:        return 0;
     }
