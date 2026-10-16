@@ -306,6 +306,20 @@ optimizer_runner = OptimizerRunner(
 
 # === 페이지 ===
 
+# no-cache: Cache-Control 이 없으면 브라우저가 Last-Modified 기준 휴리스틱 캐시를 써서
+# 배포 뒤에도 옛 페이지를 보여준다(2026-10-16 현장: 펌프 카드가 안 보임). ETag 재검증이라
+# 304 로 끝나 비용은 없다. 아래 페이지 핸들러는 baseline 그대로 두고 미들웨어로 덧붙인다.
+PAGE_PATHS = {"/", "/m", "/mobile"}
+
+
+@app.middleware("http")
+async def no_cache_pages(request, call_next):
+    response = await call_next(request)
+    if request.url.path in PAGE_PATHS:
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/")
 async def index():
     return FileResponse(str(STATIC_DIR / "index.html"))
