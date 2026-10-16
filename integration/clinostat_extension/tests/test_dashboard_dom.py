@@ -98,7 +98,7 @@ PUMP_CARD_FIELDS = [
     "pumpApplyCalibration", "pumpVolumeSection", "pumpRate", "pumpTargetVolume",
     "pumpDeliveredVolume", "pumpCumulativeVolume", "pumpDispense", "pumpStop",
     "pumpStepSection", "pumpStepCount", "pumpStepSpm", "pumpStepHz", "pumpSendSteps",
-    "pumpRunSec", "pumpRun600",
+    "pumpRunHz", "pumpRunSec", "pumpRunHzBtn",
 ]
 
 
@@ -123,16 +123,27 @@ def test_pump_card_commands_carry_pump_id(work):
     for path in ("/api/spacebio/pump/calibration", "/api/spacebio/pump/dispense",
                  "/api/spacebio/pump/stop", "/api/spacebio/pump/step"):
         assert path in build, f"{path} 가 카드 핸들러에 없다"
-    assert build.count("pump_id: pumpId") == 5      # 보정·주입·정지·스텝·600Hz 구동
+    assert build.count("pump_id: pumpId") == 5      # 보정·주입·정지·스텝·주파수 구동
 
 
-def test_pump_card_600hz_preset_uses_step_endpoint(work):
-    """600Hz 구동 버튼은 별도 API 가 아니라 스텝 명령(spm=36000)으로 간다 — µL 누적이 그대로 산다."""
+def test_pump_card_hz_run_uses_step_endpoint(work):
+    """주파수 구동 버튼은 별도 API 가 아니라 스텝 명령(steps=Hz×초, spm=Hz×60)으로 간다 —
+    µL 누적이 그대로 산다. 2026-10-16: Vref 를 바로잡은 뒤 저속도 돌아 600Hz 고정을 풀었다."""
     build = work[work.index("function spacebioBuildPumpCard"):]
     build = build[:build.index("\nfunction ", 1)]
-    run = build[build.index("f('pumpRun600').onclick"):][:400]
-    assert "/api/spacebio/pump/step" in run and "PUMP_RUN_HZ" in run
-    assert "const PUMP_RUN_HZ = 600" in work
+    run = build[build.index("f('pumpRunHzBtn').onclick"):][:600]
+    assert "/api/spacebio/pump/step" in run
+    assert "f('pumpRunHz').value" in run and "f('pumpRunSec').value" in run
+    assert "hz * sec" in run and "hz * 60" in run
+    assert "PUMP_RUN_HZ_MAX" in run
+    assert "const PUMP_RUN_HZ_MAX = 1000" in work      # 게이트웨이 PUMP_SPM_MAX 60000 과 같은 상한
+    assert "PUMP_RUN_HZ = 600" not in work
+
+
+def test_pump_card_hz_input_defaults_and_bounds(work):
+    tpl = _pump_template(work)
+    hz = tpl[tpl.index('data-f="pumpRunHz"'):][:120]
+    assert 'value="600"' in hz and 'min="1"' in hz and 'max="1000"' in hz
 
 
 def test_emergency_stop_targets_every_pump(work):
