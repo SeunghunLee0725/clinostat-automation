@@ -63,10 +63,18 @@ class GatewayConfig:
     ble_rref_ohm: Optional[float] = None
     #: 시간평균 계수 — 원시 N개를 하나로 평균한다(출력 주파수 = fs/N).
     ble_avg_factor: int = 1
+    #: 센서 패킷을 받는 길. "bleak" = Nano 33 BLE 직결(기존), "mqtt" = 펌프 보드
+    #: ESP32-C6 가 ADS1115 를 읽어 `s25007/board1/sensor` 로 발행(2026-10-22 통합).
+    #: 브로커는 위 mqtt_* 값을 같이 쓴다. bleak 로 되돌리면 Nano 경로로 복구된다.
+    ble_transport: str = "bleak"
     data_root: Path = Path("/home/aiworker-1/spacebio-data")
     flush_interval_s: float = 1.0
     flush_record_count: int = 100
     state_root: Path = Path("/home/aiworker-1/clinostat/spacebio-state")
+
+
+#: 저항센서 수신 경로. GatewayConfig.ble_transport 참고.
+BLE_TRANSPORTS = ("bleak", "mqtt")
 
 
 def load_config(path: Path) -> GatewayConfig:
@@ -87,6 +95,10 @@ def load_config(path: Path) -> GatewayConfig:
         raise ValueError(f"pump.count must be 1..{PUMP_COUNT_MAX}, got {pump_count}")
     if host == "0.0.0.0":  # noqa: S104 — 여기선 값 검사일 뿐, 바인딩이 아니다
         raise ValueError("gateway must bind to 127.0.0.1 only; 0.0.0.0 is forbidden")
+
+    ble_transport = str(ble.get("transport", "bleak"))
+    if ble_transport not in BLE_TRANSPORTS:
+        raise ValueError(f"ble.transport must be one of {BLE_TRANSPORTS}, got {ble_transport!r}")
 
     return GatewayConfig(
         host=host,
@@ -118,6 +130,7 @@ def load_config(path: Path) -> GatewayConfig:
         ble_address=ble.get("address") or None,
         ble_rref_ohm=(float(ble["rref_ohm"]) if ble.get("rref_ohm") is not None else None),
         ble_avg_factor=int(ble.get("avg_factor", 1)),
+        ble_transport=ble_transport,
         data_root=Path(store.get("data_root", "/home/aiworker-1/spacebio-data")),
         flush_interval_s=float(store.get("flush_interval_s", 1.0)),
         flush_record_count=int(store.get("flush_record_count", 100)),
@@ -127,4 +140,4 @@ def load_config(path: Path) -> GatewayConfig:
     )
 
 
-__all__ = ["GatewayConfig", "load_config"]
+__all__ = ["BLE_TRANSPORTS", "GatewayConfig", "load_config"]

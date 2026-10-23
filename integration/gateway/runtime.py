@@ -19,7 +19,7 @@ import itertools
 import logging
 import time
 from pathlib import Path
-from typing import IO, Any, AsyncIterator, Optional, Union
+from typing import IO, Any, AsyncIterator, Callable, Optional, Union
 
 from gateway.api_models import (
     GatewayComponent,
@@ -72,6 +72,7 @@ from gateway.mqtt_pump import PumpConflictError as MqttPumpConflictError
 from gateway.ble_sensor import BleSensorSource, BleTarget
 from gateway.sensor_source import SensorSourceError
 from gateway.serial_sensor import SerialSensorSource
+from gateway.mqtt_sensor import MqttSensorClient
 from gateway.simulated_pump import FileEstopLatchPersistence, SimulatedPump
 from gateway.synthetic_sensor import SyntheticSensorSource
 
@@ -107,6 +108,16 @@ class SensorConflictError(Exception):
     def __init__(self, message: str, *, code: str = "sensor_conflict") -> None:
         super().__init__(message)
         self.code = code
+
+
+def ble_client_factory(config: GatewayConfig) -> Optional[Callable[[], MqttSensorClient]]:
+    """BLE_LIVE 센서의 수신 클라이언트. bleak 이면 None(BleSensorSource 기본 = bleak)."""
+    if config.ble_transport != "mqtt":
+        return None
+    return lambda: MqttSensorClient(
+        host=config.mqtt_host, port=config.mqtt_port,
+        username=config.mqtt_username, password=config.mqtt_password,
+    )
 
 
 def _find_latest_session_dir(sessions_root: Path) -> Optional[Path]:
@@ -339,6 +350,7 @@ class GatewayRuntime:
                         name=request.device_name or self._config.ble_device_name,
                     ),
                     scan_timeout_s=request.scan_timeout_s,
+                    client_factory=ble_client_factory(self._config),
                     # 요청에 없으면 config.yaml 값을 쓴다. Rref 가 끝내 None 이면
                     # 장치 설정을 건드리지 않는다(보드의 기존 값 유지).
                     rref_ohm=(request.rref_ohm if request.rref_ohm is not None
@@ -725,5 +737,6 @@ __all__ = [
     "GatewayConfig",
     "GatewayRuntime",
     "SensorConflictError",
+    "ble_client_factory",
     "load_config",
 ]
