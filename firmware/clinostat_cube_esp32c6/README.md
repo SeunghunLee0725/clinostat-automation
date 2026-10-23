@@ -118,6 +118,26 @@ DRV8825 는 로직 전원 핀이 없으므로(VMOT 로부터 내부 3.3 V 생성
 `pos` 가 증가해도 **모터가 돌았다는 뜻이 아니다** — 엔코더가 없어 회전은 원격 확인이
 불가능하다. 반드시 눈이나 손으로 확인할 것.
 
+## 저항센서 (2026-10-22 — Nano 33 BLE 통합)
+
+ADS1115 센서 보드를 이 보드에 직결한다. Nano 33 BLE 는 빠진다.
+
+| ADS1115 | XIAO ESP32-C6 |
+|---|---|
+| SDA | D4 (GPIO22) |
+| SCL | D5 (GPIO23) |
+| VDD | 3V3 |
+| GND | GND (모터 GND 와는 한 점에서만 만나게) |
+| ADDR | GND (0x48) |
+
+- 측정은 Nano 펌웨어와 같다: AIN0−AIN1 차동, ±2.048 V, 860 SPS 연속 변환, 50 Hz 샘플.
+- `s25007/board1/sensor` 로 BLE 와 **같은 21바이트 패킷**을 10개씩(200 ms) 바이너리 발행.
+  게이트웨이는 `ble.transport: mqtt` 로 받는다(`integration/gateway/mqtt_sensor.py`).
+- ADS1115 가 없거나 빠져도 **펌프는 계속 돈다.** 5 s 마다 다시 찾는다.
+- 명령: `sensor`(상태) · `sensor:on|off`(NVS 저장, 재flash 없이 끄기).
+- GPIO22/23 은 `pin:`·`sweep` 에서 예약돼 있다.
+- 되돌리기: `../../../backups/20261022_pre_sensor_merge/RESTORE.md`.
+
 ## 빌드 · 업로드
 
 ```bash

@@ -159,7 +159,9 @@ struct PumpConfig {
 
   // 스윕에서 건너뛸 핀: 어느 모터든 EN 으로 쓰는 핀, 그리고 **다른** 모터의 STEP/DIR.
   // 다른 모터 핀을 두들기면 그 모터가 돌아 "어느 핀이 내 STEP 인지" 를 읽을 수 없다.
+  // 저항센서 I²C(GPIO22/23)도 건너뛴다 — 두들기면 ADS1115 버스가 깨진다.
   bool sweepReserved(int gpio, int forIdx) const {
+    if (gpio == 22 || gpio == 23) return true;
     for (int i = 0; i < PUMP_COUNT; i++) {
       if (motor[i].enConnected() && motor[i].enGpio == gpio) return true;
       if (i != forIdx && motor[i].usesGpio(gpio)) return true;

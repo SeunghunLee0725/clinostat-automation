@@ -22,6 +22,7 @@
 #include <ESPmDNS.h>
 #include <PubSubClient.h>
 #include "pump_config.h"
+#include "sensor_ads1115.h"
 
 // (펌프 번호 0-base, 명령 문자열)
 typedef void (*CommandHandler)(int, const String&);
@@ -33,6 +34,7 @@ public:
     _onCommand = onCommand;
     _mqtt.setClient(_net);
     _mqtt.setCallback(&PumpNet::trampoline);
+    _mqtt.setBufferSize(512);   // 센서 묶음 210 B + 헤더 — 기본 256 B 는 빠듯하다
     _self = this;
 
     WiFi.mode(WIFI_STA);
@@ -53,6 +55,12 @@ public:
     if (!_mqtt.connected()) return false;
     if (idx < 0 || idx >= PUMP_COUNT) return false;
     return _mqtt.publish(TOPIC_STATUS[idx], payload.c_str());
+  }
+
+  // 저항센서 묶음(바이너리). sensor_ads1115.h 가 200 ms 마다 부른다.
+  bool publishSensor(const uint8_t* data, size_t len) {
+    if (!_mqtt.connected()) return false;
+    return _mqtt.publish(TOPIC_SENSOR, data, len);
   }
 
   // 명령 응답 — status 와 다른 토픽으로 보낸다(게이트웨이 파서와 섞이지 않게).

@@ -23,6 +23,7 @@
  *   pincheck:<gpio>   패드 무결성.
  *   broker:<ip>[:<port>] / brokerhost:<name>   브로커 주소. 재flash 없이 바꾼다.
  *   resetpos · wiring · status · help
+ *   sensor · sensor:on|off   저항센서(ADS1115) 상태·켜고 끄기 (2026-10-22, NVS 저장)
  *
  * 2026-10-15 — 펌프 2대. 모터 명령은 **대상 펌프 접두어** `p1:` / `p2:` 를 받는다.
  *   접두어가 없으면 펌프 1 이다 (매뉴얼·기존 앱·게이트웨이 호환). MQTT 로는 토픽이
@@ -34,6 +35,7 @@
 #include <Preferences.h>
 #include "pump_config.h"
 #include "pump_drive.h"
+#include "sensor_ads1115.h"
 
 // 이 모듈이 조작하는 대상 — .ino 에서 주입한다.
 extern PumpConfig  gCfg;
@@ -41,6 +43,7 @@ extern PumpDrive   gPumps[PUMP_COUNT];
 extern Preferences gPrefs;
 extern bool        gLedState;
 extern int         gLedGpio;
+extern SensorAds1115 gSensor;
 
 // 상태 한 줄을 만든다(.ino 에 정의). 브로커가 없을 때 시리얼로 pos 를 확인하는
 // 유일한 수단이므로 명령 파서에서도 쓸 수 있어야 한다.
@@ -84,6 +87,10 @@ inline void replyWiring(int idx) {
 // 배선 변경은 즉시 적용 + NVS 저장. 어느 핀인지 되돌려 알려준다.
 // 다른 펌프가 이미 쓰는 핀은 거부한다 — 두 모터가 한 STEP 선을 공유하면 개별 운전이 깨진다.
 inline bool setWiringPin(int idx, const String& which, int gpio) {
+  if (SensorAds1115::usesGpio(gpio)) {
+    replyFor(idx, "err gpio " + String(gpio) + " 은(는) 저항센서 I2C 가 쓰고 있습니다");
+    return false;
+  }
   for (int i = 0; i < PUMP_COUNT; i++) {
     if (i != idx && gCfg.motor[i].usesGpio(gpio)) {
       replyFor(idx, "err gpio " + String(gpio) + " 은(는) 펌프 " + String(i + 1) + " 이 쓰고 있습니다");
@@ -259,6 +266,9 @@ inline void handleCommandFor(int idx, const String& raw) {
     gReply("ok brokerhost " + String(gCfg.brokerHost) + " (다음 재접속부터)");
   }
 
+  else if (c == "sensor")     { gReply(gSensor.statusLine()); }
+  else if (c == "sensor:on")  { gSensor.setEnabled(true);  gReply(gSensor.statusLine()); }
+  else if (c == "sensor:off") { gSensor.setEnabled(false); gReply(gSensor.statusLine()); }
   else if (c == "resetpos") { pump.resetPosition(); replyFor(idx, "ok pos=0"); }
   else if (c == "wiring")   { for (int i = 0; i < PUMP_COUNT; i++) replyWiring(i); }
   else if (c == "status")   { for (int i = 0; i < PUMP_COUNT; i++) gReply(buildStatusLine(i)); }
@@ -267,6 +277,7 @@ inline void handleCommandFor(int idx, const String& raw) {
     gReply("     [p1:|p2:]hz:<hz>[:<sec>] sweep[:hz[:ms]] dir:fwd|rev hold:on|off resetpos");
     gReply("     [p1:|p2:]pin:step|dir|en:<gpio> pinD:step|dir|en:<D> enpol:low|high pulse:<us> ramp:<hz>[,<ms>]");
     gReply("     pincheck:<gpio> broker:<ip>[:<port>] brokerhost:<name> wiring status help");
+    gReply("     sensor sensor:on|off  (저항센서 ADS1115, D4=SDA D5=SCL, s25007/board1/sensor)");
     gReply("     접두어 없음 = 펌프 1. MQTT 는 토픽이 대상을 정한다 (…/board1/p2/cmd = 펌프 2).");
   }
   else {

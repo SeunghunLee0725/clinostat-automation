@@ -23,6 +23,10 @@
  *   보드 하나가 DRV8825 두 개를 몬다. 엔진 인스턴스가 펌프 수만큼 있고 각자 독립된
  *   핀·속도·pos 를 가진다. 시리얼 명령은 `p1:`/`p2:` 접두어로 대상을 고른다(없으면 펌프 1).
  *
+ * ── 저항센서 (2026-10-22) ─────────────────────────────────────────────────
+ *   Nano 33 BLE 를 빼고 ADS1115 를 D4/D5(I²C)에 직결. `s25007/board1/sensor` 로 발행.
+ *   상세는 sensor_ads1115.h. 시리얼/MQTT 명령 `sensor`, `sensor:on|off`.
+ *
  * ── 라이브러리 ────────────────────────────────────────────────────────────
  *   PubSubClient  (AccelStepper 는 더 이상 쓰지 않는다 — 자체 엔진으로 대체)
  *
@@ -35,12 +39,14 @@
 #include "pump_config.h"
 #include "pump_drive.h"
 #include "pump_net.h"
+#include "sensor_ads1115.h"
 
 // ---- 전역 (pump_commands.h 가 extern 으로 참조) ----
 PumpConfig  gCfg;
 PumpDrive   gPumps[PUMP_COUNT];
 Preferences gPrefs;
 PumpNet     gNet;
+SensorAds1115 gSensor;
 bool        gLedState = false;
 int         gLedGpio  = LED_BUILTIN;      // XIAO ESP32-C6 내장 LED
 
@@ -53,6 +59,10 @@ ReplyFn gReply = reply;
 static void reply(const String& msg) {
   Serial.println(msg);
   gNet.publishReply(msg);
+}
+
+static bool publishSensorBatch(const uint8_t* data, size_t len) {
+  return gNet.publishSensor(data, len);
 }
 
 static unsigned long lastStatusMs = 0;
@@ -106,6 +116,7 @@ void setup() {
   Serial.println("USB 시리얼로도 모든 명령을 쓸 수 있습니다. `help` 입력. (p1:/p2: 접두어로 펌프 선택)");
 
   gNet.begin(&gCfg, handleMqttCommand);
+  gSensor.begin(&gPrefs, publishSensorBatch);
 }
 
 void loop() {
@@ -114,6 +125,8 @@ void loop() {
   pollSerialCommands();
   for (int i = 0; i < PUMP_COUNT; i++) gPumps[i].tick();
   gNet.tick(anyPumpRunning());   // 구동 중엔 블로킹 재접속을 미룬다 (펄스 타이밍 우선)
+  for (int i = 0; i < PUMP_COUNT; i++) gPumps[i].tick();
+  gSensor.tick();                // I²C 읽기 ≈0.1 ms, 20 ms 마다
 
   if (millis() - lastStatusMs >= 2000) {
     lastStatusMs = millis();
