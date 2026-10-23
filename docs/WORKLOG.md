@@ -6,6 +6,39 @@
 
 ---
 
+## 2026-10-22 — 저항센서를 펌프 보드(ESP32-C6)로 통합 (실기 적용·종단 확인)
+
+| 항목 | 상태 |
+|---|---|
+| 결정 | Nano 33 BLE 제거. ADS1115 를 XIAO D4(SDA)/D5(SCL) I²C 직결, MQTT `s25007/board1/sensor` 로 발행 |
+| 펌웨어 | `sensor_ads1115.h` 추가(Nano 와 같은 0x04E3 설정, 50 Hz, BLE 와 같은 21 B 패킷 ×10 묶음). 센서가 없어도 펌프 정상, `sensor:on/off` NVS. 빌드 OK(플래시 81 %). 16:00 맥(USB 허브)에서 **앱 영역만** 플래시, NVS 유지 확인. 시리얼 `sensor` → `ads=ok raw=25216` |
+| 게이트웨이 | `gateway/mqtt_sensor.py`(BleClient 프로토콜 구현 → BleSensorSource 로직 재사용), config `ble.transport: bleak|mqtt`(기본 bleak). 대시보드·API 변경 없음(모드는 계속 BLE_LIVE) |
+| 테스트 | `tests/test_mqtt_sensor.py` 13건 추가. 전체 823 passed, 기존 `test_ble_sensor.py` 2건 실패는 그대로 |
+| 복구 | git 태그 `pre-sensor-merge-20261022`, 브랜치 `feat/esp32-sensor-merge`, 바이너리·원본 파일과 절차 `../backups/20261022_pre_sensor_merge/RESTORE.md` |
+| 파이 | mqtt_sensor.py·runtime.py·runtime_config.py 배포, config `ble.transport: mqtt`, 재시작(16:04). 백업 `~/spacebio-backups/20261022_160345_pre_sensor_merge` |
+| 종단 | `/api/sensor/configure`(BLE_LIVE, Rref 81k) → start → 20 s 연속 수신, raw 25214~25216(±1 LSB, 펌프 정지 상태), R ≈ 1.156 kΩ |
+
+| 구동 시험 | 12 V 급전(맥 USB 분리), 파이에서 MQTT 직접 수집(`noise_test.py`). 두 펌프 `hz:600:30` → pos 17,757 = 램프 포함 기대값(≈17,750)과 일치 → **센서 읽기로 인한 펄스 손실 없음**. raw sd: 정지 전 5.15 / 600 Hz 5.39 / 정지 후 5.67 LSB → **펌프 구동에 따른 노이즈 증가 없음**. 샘플 49.8~50.0 /s |
+| 관찰 | 12 V 급전 시 sd ≈ 5 LSB(맥 USB 급전 때 ±1 LSB), 평균 raw 25,216→25,261 이동 → 노이즈·오프셋은 전원(MP1584→3V3 = Vexc) 쪽. 게이트웨이는 Vexc 3.2 V 고정 가정 |
+
+### 다음 할 일
+- 펌프 실제 회전은 육안 확인 필요(pos 는 펄스 수일 뿐)
+- Vexc 전원 노이즈: Vexc 를 ADS1115 한 채널로 같이 재서 비율식으로 계산하거나 Vexc 전용 LDO/RC 필터
+- Rref(81 kΩ)가 시료(≈1.1 kΩ)보다 70배 커서 Vmid 가 Vexc 에 붙어 있음 → 5 LSB 가 약 0.7 % 로 증폭. 시료 범위에 맞춰 Rref 를 낮출 것
+
+### 카메라 색 수정 (2026-10-22 16:18)
+- 증상: 대시보드 카메라가 파랗게 나옴(피부·골판지가 파랑). 원인: `work/camera.py` 가 picamera2 `"RGB888"`(실제 메모리 순서 B,G,R = OpenCV BGR)을 한 번 더 뒤집어 R/B 교환
+- 수정: 뒤집기 제거 + 회귀 테스트 `test_picamera_rgb888_frame_is_passed_through_unflipped`(확장 테스트 439 passed). 파이 배포·`clinostat` 재시작, 스냅샷 정상색 확인. 백업 `~/spacebio-backups/20261022_161800_camera`
+- 카메라는 imx708_noir(IR 필터 없음) — 조명에 따라 약간 분홍빛은 정상
+
+### 논의 기록 (2026-10-22 오후) — 근육 응답 전압 측정 추가 계획
+- **운용 전제**: 측정 중에도 12 V(MP1584) 급전을 그대로 쓴다. 펌프와 측정이 겹칠 일은 거의 없다(겹쳐도 시험상 간섭 없음). 남는 노이즈원은 12 V→3V3 = Vexc(sd ≈ 5 LSB) → Rref 하향, Vexc 를 ADS1115 AIN 으로 같이 재는 비율 보정이 후보
+- **목적**: 근육에 전기자극을 줬을 때 나오는 응답 전압을 읽는다. **사용자가 신호를 실측해 범위를 알려주기로 함**(최대 전압, 음전압 여부, 파형 속도, GND 공유 여부)
+- **남은 자원**: XIAO 빈 핀 D0(GPIO0, ADC 가능)·D3(GPIO21)·D6(GPIO16, 부팅 시 UART TX 펄스). ADS1115 AIN2·AIN3 비어 있음
+- **ADS1115 제약**: VDD 는 3.3 V 유지(5 V 면 I²C 풀업이 ESP32 핀을 5 V 로 당김). 입력은 0~VDD, 음전압 불가 → 양방향 신호는 opamp 오프셋/레벨시프트 필요. ADC 하나를 MUX 로 공유 — 센서 연속변환 사이에 끼워 읽음(1회 2~3 ms). 최대 860 SPS 라 ms 단위 펄스·빠른 파형에는 부적합 → 그 경우 별도 ADC(빠른 외장 ADC 또는 ESP32 내장 ADC + opamp) 검토
+
+---
+
 ## 2026-10-21 — 저항센서 새 보드 연결 성공
 
 | 항목 | 상태 |
