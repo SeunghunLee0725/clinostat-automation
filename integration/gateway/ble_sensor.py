@@ -48,15 +48,44 @@ MAX_BUFFERED_SAMPLES = 2048
 #: 한 번 끊겼다고 바로 오류로 올리지 않는다. 연속 실패가 이 값을 넘으면 FAULT.
 MAX_RECONNECT_ATTEMPTS = 5
 
+#: 재연결 backoff 상한[s]. 회전 중 끊김은 수십 초 안에 회복되므로 짧게 유지한다.
+RECONNECT_MAX_DELAY_S = 5.0
+
 #: 첫 연결 시도 횟수. BlueZ 는 연결/해제를 반복하면 다음 connect() 가 간헐적으로
 #: 타임아웃한다 — 한 번 실패로 FAULT 를 띄우면 운영자가 버튼을 여러 번 눌러야 한다.
-INITIAL_CONNECT_ATTEMPTS = 3
+INITIAL_CONNECT_ATTEMPTS = 6
 
 #: 설정 패킷에서 Rref 와 함께 나가는 고정 파라미터. v2 펌웨어 config.h 값이며
 #: 원본 UI(`frontend_ble_web.py`)도 이 셋은 사용자에게 열지 않았다.
 FIXED_SAMPLING_RATE_HZ = 50
 FIXED_GAIN = 1.0
-FIXED_PGA = 8
+FIXED_PGA = 2
+
+#: 게이트웨이 측 저항 재계산 (2026-09-04).
+#: 보드 펌웨어는 Rref 를 자기 기본값으로 계산해 내보내므로, 웹에서 입력한 Rref 가
+#: 결과에 반영되지 않는다. raw_adc 는 항상 실측이므로 여기서 다시 계산한다.
+#: 분압: Vexc — R_sensor — node(Vmid) — Rref — GND,  Vmid = Vref + raw·LSB
+#:       R_sensor = Rref·(Vexc − Vmid) / Vmid
+EXCITATION_VOLTAGE_V = 3.2      # 2026-09-04 실측
+# AIN1(100k/100k 중점)의 실측 보정값. 알려진 두 시료(10 kΩ, 84.8 kΩ)의 raw 로
+# 역산했다(2026-09-04): 두 점 모두 0.05 % 이내로 맞는다.
+VREF_VOLTAGE_V = 1.579
+ADC_FULL_SCALE_V = {1: 4.096, 2: 2.048, 4: 1.024, 8: 0.512, 16: 0.256}[FIXED_PGA]
+ADC_LSB_VOLTS = ADC_FULL_SCALE_V / 32768.0
+RESISTANCE_MIN_OHM = 1.0
+RESISTANCE_MAX_OHM = 1_000_000.0
+
+
+def recompute_resistance(raw_adc: int, rref_ohm: float,
+                         vexc_v: float = EXCITATION_VOLTAGE_V,
+                         vref_v: float = VREF_VOLTAGE_V,
+                         lsb_v: float = ADC_LSB_VOLTS) -> Optional[float]:
+    """raw_adc 와 Rref 로 시료 저항[Ω]. 분압 범위를 벗어나면 None(포화·개방)."""
+    vmid = vref_v + raw_adc * lsb_v
+    if vmid <= 0.0 or vmid >= vexc_v:
+        return None
+    r = rref_ohm * (vexc_v - vmid) / vmid
+    return min(max(r, RESISTANCE_MIN_OHM), RESISTANCE_MAX_OHM)
 
 #: 시간평균 계수 상한. 원본 UI 와 같다.
 AVG_FACTOR_MAX = 200
@@ -136,6 +165,7 @@ class BleSensorSource:
         self._initial_attempts = max(1, initial_attempts)
         #: None 이면 장치 설정을 건드리지 않는다(보드에 마지막으로 쓰인 값을 그대로 씀).
         self._rref_ohm = rref_ohm
+        self._baseline_ohm: Optional[float] = None   # 재계산 저항의 기준값
         self._avg_factor = max(1, min(avg_factor, AVG_FACTOR_MAX))
         self._avg_buf: list = []
         self._reconnects = 0
@@ -223,23 +253,30 @@ class BleSensorSource:
                     failures = 0          # 데이터가 흐르면 실패 카운트를 지운다
 
                 # stream이 끝났다 = 연결이 끊겼다.
+                # 무한 재연결 (2026-09-04): 회전 중에는 링크가 자주 끊긴다.
+                # 몇 회로 포기하면 남은 실험 구간을 통째로 잃으므로, 정지 지시가
+                # 오기 전까지 계속 시도한다. 끊긴 구간은 기록에 공백으로 남는다.
                 failures += 1
-                if failures > self._max_reconnects:
-                    self._error = (
-                        f"BLE 연결이 끊긴 뒤 재연결 {self._max_reconnects}회 모두 실패 "
-                        f"({self._target.describe()})"
-                    )
-                    logger.warning("%s", self._error)
-                    return
-                delay = min(2.0 * failures, 10.0)
-                logger.warning("BLE 연결 끊김 — %.0f초 후 재연결 시도 (%d/%d)",
-                               delay, failures, self._max_reconnects)
+                delay = min(1.0 * failures, RECONNECT_MAX_DELAY_S)
+                if failures == 1 or failures % 10 == 0:
+                    logger.warning("BLE 연결 끊김 — %.0f초 후 재연결 시도 (누적 %d회, 재연결 %d회 성공)",
+                                   delay, failures, self._reconnects)
                 await asyncio.sleep(delay)
                 with contextlib.suppress(Exception):
                     await client.disconnect()
-                if await client.connect(self._target, self._scan_timeout_s):
+                connected = False
+                try:
+                    connected = await client.connect(self._target, self._scan_timeout_s)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — 타임아웃도 재시도 대상
+                    if failures % 10 == 0:
+                        logger.warning("BLE 재연결 실패(%d회째): %s", failures, exc)
+                if connected:
                     self._reconnects += 1
-                    logger.info("BLE 센서 재연결됨 (%s)", self._target.describe())
+                    failures = 0
+                    logger.info("BLE 센서 재연결됨 (%s, 누적 %d회)",
+                                self._target.describe(), self._reconnects)
                     # 보드가 리셋됐을 수도 있으니 Rref 를 다시 적용한다.
                     await self._apply_rref(client)
         except asyncio.CancelledError:
@@ -288,6 +325,7 @@ class BleSensorSource:
         try:
             await writer(FIXED_SAMPLING_RATE_HZ, float(self._rref_ohm),
                          FIXED_GAIN, FIXED_PGA)
+            self._baseline_ohm = None
             logger.info("Rref %.0f Ω 적용 (baseline 재설정됨)", self._rref_ohm)
         except Exception:  # noqa: BLE001 — 설정 실패가 수신을 막지는 않는다
             logger.warning("Rref 적용 실패 — 보드의 기존 설정으로 계속한다",
@@ -318,13 +356,30 @@ class BleSensorSource:
         if self._first_timestamp_ms is None:
             self._first_timestamp_ms = parsed["timestamp_ms"]
         elapsed_ms = parsed["timestamp_ms"] - self._first_timestamp_ms
+
+        # 저항은 웹에서 입력한 Rref 기준으로 게이트웨이가 다시 계산한다.
+        # Rref 를 지정하지 않았으면 보드가 보낸 값을 그대로 쓴다.
+        resistance = parsed["resistance_ohm"]
+        delta = parsed["delta_r_over_r0"]
+        if self._rref_ohm is not None:
+            recomputed = recompute_resistance(parsed["raw_adc"], float(self._rref_ohm))
+            if recomputed is not None:
+                resistance = recomputed
+                if self._baseline_ohm is None:
+                    self._baseline_ohm = recomputed
+                delta = ((recomputed - self._baseline_ohm) / self._baseline_ohm
+                         if self._baseline_ohm else 0.0)
+            else:
+                # 포화·개방: 저항을 지어내지 않는다. 직전 값을 유지하지 않고 그대로 보고.
+                resistance = parsed["resistance_ohm"]
+
         return SensorSample(
             source_timestamp_ms=parsed["timestamp_ms"],
             session_elapsed_ms=max(0, elapsed_ms),
             loop_count=0,
             raw_adc=parsed["raw_adc"],      # 시리얼 경로와 달리 실측값이 있다
-            resistance_ohm=parsed["resistance_ohm"],
-            delta_r_over_r0=parsed["delta_r_over_r0"],
+            resistance_ohm=resistance,
+            delta_r_over_r0=delta,
             temperature_c=parsed["temperature_c"],
             battery_pct=parsed["battery_pct"],
         )
@@ -348,7 +403,10 @@ class _BleakClientAdapter:
     #: 재연결 때 주소로 바로 찾을 때 쓰는 짧은 탐색 시간. 전체 스캔(15초)을 다시
     #: 돌리면 끊길 때마다 20초 넘는 공백이 생긴다 — 실기에서 45~150초마다 끊기므로
     #: 이 공백이 "신호가 들어오다 안 들어오다" 하는 원인이 된다.
-    REDISCOVER_TIMEOUT_S = 4.0
+    # 재연결 시 '마지막 주소로 바로 찾기' 에 주는 시간. 4 s 는 광고 주기와 겹치지
+    # 않으면 자주 놓쳐 전체 스캔(느림)으로 떨어졌다 — 2026-09-04 실측에서 재연결
+    # 시간이 6 s / 24 s 두 봉우리로 갈렸고 24 s 쪽이 전체 스캔 경로였다.
+    REDISCOVER_TIMEOUT_S = 12.0
 
     def __init__(self) -> None:
         self._client: Any = None
@@ -409,6 +467,16 @@ class _BleakClientAdapter:
             for device, adv in found.values()
             if wanted in {u.lower() for u in (adv.service_uuids or [])}
         ]
+        # 이름 폴백 (2026-09-04): 보드가 재광고를 반복하면 광고 패킷에서 커스텀
+        # 서비스 UUID 가 빠지는 경우가 있다(실측: local_name 은 유지, uuids 는 0x1800만).
+        # UUID 로 못 찾으면 이름으로 찾아 붙는다 — 연결 후 서비스 존재는 GATT 로 확인된다.
+        if not matches:
+            wanted_name = (target.name or DEFAULT_DEVICE_NAME).strip()
+            named = [(d, a) for d, a in found.values()
+                     if (a.local_name or "").strip() == wanted_name]
+            if named:
+                logger.warning("서비스 UUID 광고가 없어 이름(%s)으로 찾았다 — 보드 재부팅 권장", wanted_name)
+                matches = named
         if not matches:
             return None
         if target.name:
