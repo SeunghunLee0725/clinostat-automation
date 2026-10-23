@@ -1086,6 +1086,21 @@ def test_picamera_read_has_numeric_timeout(camera_module):
     assert fake.wait_values == [2.0]
 
 
+def test_picamera_rgb888_frame_is_passed_through_unflipped(camera_module):
+    """picamera2 "RGB888" 은 메모리상 B,G,R 순서 = OpenCV BGR 그대로다.
+    뒤집으면 R/B 가 바뀌어 화면이 파랗게 나온다(2026-10-22 imx708_noir 실기)."""
+    array = object()
+    fake = RecordingPicamera(array=array)
+    cam = camera_module.Camera(capture_timeout_s=2.0)
+    cam._backend = 'picamera2'
+    cam._picam = fake
+
+    ok, frame = cam._read_frame()
+
+    assert ok is True
+    assert frame is array
+
+
 @pytest.mark.parametrize('failure_stage', ('constructor', 'isOpened', 'set', 'read'))
 def test_cv2_open_exception_releases_temporary_handle_and_reports_error(
     camera_module, monkeypatch, failure_stage

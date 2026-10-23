@@ -319,8 +319,9 @@ class Camera:
         if backend == "cv2" and backend_handle is not None:
             return backend_handle.read()
         if backend == "picamera2" and backend_handle is not None:
-            rgb = backend_handle.capture_array(wait=self.capture_timeout_s)
-            bgr = _np.ascontiguousarray(rgb[:, :, ::-1])
+            # picamera2 "RGB888" 은 이름과 달리 메모리상 B,G,R 순서 = OpenCV BGR.
+            # 뒤집으면 R/B 가 바뀌어 화면이 파랗게 나온다(2026-10-22 실기).
+            bgr = backend_handle.capture_array(wait=self.capture_timeout_s)
             return True, bgr
         return False, None
 
