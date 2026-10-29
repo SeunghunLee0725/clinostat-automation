@@ -479,7 +479,7 @@ def test_three_columns_only_on_wide_screens(work):
 
 
 @pytest.mark.parametrize("folded", [
-    "연결 설정", "기록 상태 · 펌프",
+    "연결 설정", "기록 상태 · Gateway",
 ])
 def test_secondary_sections_are_collapsible(work, folded):
     """상시 볼 필요 없는 것은 접는다(연결 523px · 메트릭 587px 실측)."""
