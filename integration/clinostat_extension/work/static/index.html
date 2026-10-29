@@ -3203,6 +3203,54 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
 #spacebioPanel .sb-drop-body .sb-sec:first-of-type { margin-top: 8px; }
 #spacebioPanel .sb-sub-title { margin-top: 10px; }
 #spacebioPanel .sb-danger-zone details.sb-drop { border-color: #fecaca; }
+
+/* ── 직사각형 타일 배치 (2026-10-29 2차) ─────────────────────────────────
+   설정을 펼치면 같은 줄 카드가 함께 늘어나 열 높이가 1,620 / 920 / 2,509px 로
+   들쭉날쭉했다. 넓은 화면에서는 세 열을 화면 높이에 고정해 바깥 윤곽을 직사각형으로
+   만들고, 카드 칸 크기는 그대로 둔 채 넘치는 내용은 카드·열 안에서 스크롤한다. */
+/* 좁은 화면: 열 고정은 하지 않고 줄마다 같은 높이의 격자로만 묶는다. */
+#spacebioPanel .ui-device-grid, #spacebioPanel .ui-row-chart, #spacebioPanel .ui-row-records {
+  display: grid; gap: 12px; margin-top: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+#spacebioPanel .ui-row-chart > .sb-card, #spacebioPanel .ui-row-records > .sb-card { margin-top: 0 !important; }
+@media (min-width: 1600px) {
+  #spacebioPanel .ui-device-grid, #spacebioPanel .ui-row-chart, #spacebioPanel .ui-row-records { margin-top: 0; }
+  body { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { flex: none; }
+  .main {
+    flex: 1 1 auto; min-height: 0; width: 100%;
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch !important;
+  }
+  .main > .panel, .main > .monitor, .main > #spacebioPanel { min-height: 0; overflow-y: auto; }
+
+  /* 왼쪽: 내용은 스크롤하고 STOP ALL 은 언제나 열 바닥에 보인다. */
+  .panel .btn-stop { position: sticky; bottom: 0; margin-top: auto; z-index: 2; flex: none; }
+
+  /* 가운데: 마지막 메트릭 줄이 남은 높이를 채워 열 바닥을 맞춘다. */
+  .monitor .metrics-grid { flex: 1 1 auto; min-height: 210px; }
+  .monitor .metrics-grid .metric-paper { height: auto !important; }
+
+  /* 오른쪽: 장치 카드 2×2 는 같은 크기 칸, 그 아래 차트·이벤트, 기록 줄. */
+  #spacebioPanel { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+  #spacebioPanel > h2, #spacebioPanel > .sb-sub { flex: none; margin-bottom: 0; }
+  #spacebioPanel .ui-device-grid {
+    flex: 1 1 0; min-height: 460px; display: grid; gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  #spacebioPanel .ui-device-grid > .sb-card,
+  #spacebioPanel .ui-device-grid #pumpCards > .sb-card { min-height: 0; overflow-y: auto; margin: 0; }
+  #spacebioPanel .ui-row-chart, #spacebioPanel .ui-row-records {
+    flex: none; display: grid; gap: 12px; }
+  #spacebioPanel .ui-row-chart { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); height: 210px; }
+  #spacebioPanel .ui-row-records { grid-template-columns: repeat(2, minmax(0, 1fr)); height: 220px; }
+  #spacebioPanel .ui-row-chart > .sb-card, #spacebioPanel .ui-row-records > .sb-card {
+    margin: 0 !important; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+  #spacebioPanel .ui-row-chart .sb-chart-wrap { height: auto !important; flex: 1 1 0; min-height: 0; }
+  #spacebioPanel .ui-row-chart #spacebioEvents { max-height: none; flex: 1 1 0; }
+  #spacebioArchive .sb-arch-list { max-height: none; }
+}
 </style>
 <script>
 // 차트 색은 baseline 줄(어두운 배경용)에 박혀 있다 — 줄을 고치지 않고 그려진 뒤에 바꾼다.
@@ -3242,7 +3290,52 @@ function uiApplyChartTheme() {
     }
   } catch (e) { /* 무시 */ }
 }
+// 넓은 화면의 직사각형 타일 배치를 위해 카드를 줄 단위로 묶는다. 좁은 화면에서는
+// 묶음이 그냥 위에서 아래로 쌓인다. 요소가 없으면 조용히 넘어간다.
+function uiApplyTileLayout() {
+  const panel = document.getElementById('spacebioPanel');
+  if (!panel) return;
+  const grid = panel.querySelector(':scope > .sb-grid');
+  const card = (id) => { const el = document.getElementById(id); return el && el.closest('.sb-card'); };
+  if (grid && !panel.querySelector('.ui-device-grid')) {
+    const devices = document.createElement('div');
+    devices.className = 'ui-device-grid';
+    [card('resistanceModeBadge'), document.getElementById('pumpCards'), card('pumpEmergencyStop')]
+      .filter(Boolean).forEach((el) => devices.appendChild(el));
+    grid.parentNode.insertBefore(devices, grid);
+
+    const chartRow = document.createElement('div');
+    chartRow.className = 'ui-row-chart';
+    [card('resistanceChart'), card('spacebioEvents')].filter(Boolean)
+      .forEach((el) => chartRow.appendChild(el));
+    devices.parentNode.insertBefore(chartRow, devices.nextSibling);
+
+    // 기록 카드는 접힘(▸ 기록 상태) 안에 있다 — 타일 줄에서는 꺼내 기록 관리 옆에 둔다.
+    const recordsRow = document.createElement('div');
+    recordsRow.className = 'ui-row-records';
+    const records = card('spacebioSessionRecordingState');
+    const fold = records && records.closest('details.sb-fold');
+    [document.getElementById('spacebioArchive'), records].filter(Boolean)
+      .forEach((el) => recordsRow.appendChild(el));
+    chartRow.parentNode.insertBefore(recordsRow, chartRow.nextSibling);
+    if (fold && !fold.querySelector('.sb-card')) fold.remove();
+    if (!grid.children.length) grid.remove();
+  }
+  // 카드 안에서 설정을 펼치면 펼친 부분이 보이도록 카드 안쪽을 스크롤한다.
+  // toggle 은 버블링되지 않아 캡처로 받는다 — 나중에 만들어지는 펌프 카드도 잡힌다.
+  if (!panel.dataset.uiToggle) {
+    panel.dataset.uiToggle = '1';
+    panel.addEventListener('toggle', (ev) => {
+      const box = ev.target;
+      if (box.matches && box.matches('details.sb-drop') && box.open) {
+        box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }, true);
+  }
+  window.dispatchEvent(new Event('resize'));
+}
 window.addEventListener('load', () => {
+  uiApplyTileLayout();
   uiApplyChartTheme();
   setTimeout(uiApplyChartTheme, 800);    // 저항 차트는 DOMContentLoaded 뒤 비동기로 만들어진다
 });

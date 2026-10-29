@@ -119,3 +119,47 @@ def test_charts_are_rethemed_at_runtime(work):
     assert "Chart.getChart" in fn and "update(" in fn
     assert "sphereLayout" in fn and "Plotly.relayout" in fn
     assert "try" in fn, "테마 실패가 화면을 막으면 안 된다"
+
+
+# ───────────── 직사각형 타일 배치 (2026-10-29 2차) ─────────────
+#
+# 설정을 펼치면 같은 줄 카드가 함께 늘어나 열 높이가 1,620 / 920 / 2,509px 로
+# 들쭉날쭉했다. 넓은 화면에서는 세 열을 화면 높이에 고정하고, 카드 칸 크기를
+# 일정하게 둔 채 펼친 설정은 카드 안에서 스크롤한다.
+
+def _tile_css(work: str) -> str:
+    block = _between(work, '<style id="uiTheme">', "</style>")
+    return block[block.index("@media (min-width: 1600px)"):]
+
+
+def test_wide_layout_pins_the_three_columns_to_the_viewport(work):
+    css = _tile_css(work)
+    assert "height: 100vh" in css
+    assert "align-items: stretch !important" in css, "앞선 align-items:start 를 이겨야 한다"
+    assert css.count("overflow-y: auto") >= 3
+
+
+def test_device_cards_share_equal_cells_and_scroll_inside(work):
+    css = _tile_css(work)
+    assert "grid-template-rows: repeat(2, minmax(0, 1fr))" in css
+    assert "#spacebioPanel .ui-device-grid > .sb-card" in css
+
+
+def test_stop_all_stays_pinned_at_the_bottom_of_the_left_column(work):
+    css = _tile_css(work)
+    stop = css[css.index(".btn-stop"):][:160]
+    assert "position: sticky" in stop and "bottom: 0" in stop
+
+
+def test_tile_layout_regroups_cards_at_runtime(work):
+    fn = _between(work, "function uiApplyTileLayout", "\n}")
+    assert "if (!panel) return;" in fn, "배치 실패가 기능을 막으면 안 된다"
+    for cls in ("ui-device-grid", "ui-row-chart", "ui-row-records"):
+        assert cls in fn
+    assert "spacebioArchive" in fn and "spacebioEvents" in fn
+    assert "uiApplyTileLayout();" in work
+
+
+def test_opened_settings_scroll_into_view_inside_the_card(work):
+    fn = _between(work, "function uiApplyTileLayout", "\n}")
+    assert "'toggle'" in fn and "scrollIntoView" in fn
