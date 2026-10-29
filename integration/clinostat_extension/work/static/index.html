@@ -3103,19 +3103,27 @@ document.addEventListener('DOMContentLoaded', () => {
      둔 규칙(#2a2a4a 테두리, 버튼 글자색 등)만 골라 다시 쓴다. -->
 <style id="uiTheme">
 :root {
-  --bg: #f3f4f6;
-  --surface: #ffffff;
-  --card: #ffffff;
-  --accent: #c8102e;
-  --green: #15803d;
-  --blue: #1d4ed8;
-  --orange: #b45309;
-  --text: #111827;
-  --text-dim: #6b7280;
+  /* 검은 배경 · 흰 글자 (2026-10-29 3차). 강조는 흑백으로, 색은 상태(정지·실측·경고)에만 쓴다. */
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --card: #0a0a0a;
+  --accent: #ef4444;
+  --green: #22c55e;
+  --blue: #ffffff;
+  --orange: #f59e0b;
+  --text: #ffffff;
+  --text-dim: #a3a3a3;
   --radius: 8px;
-  --line: #e5e7eb;
-  --line-strong: #d1d5db;
-  --fill-soft: #f9fafb;
+  --line: #262626;
+  --line-strong: #404040;
+  --fill-soft: #141414;
+  --field: #000000;
+  --primary: #ffffff;
+  --primary-hover: #d4d4d4;
+  --on-primary: #000000;
+  --danger-hover: #dc2626;
+  --danger-soft: rgba(239,68,68,.08);
+  --danger-line: rgba(239,68,68,.45);
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 body { font-family: -apple-system, 'Pretendard', 'Apple SD Gothic Neo', 'Segoe UI', system-ui, sans-serif;
@@ -3124,6 +3132,9 @@ header { background: var(--surface); border-bottom: 1px solid var(--line); paddi
 header h1 { font-size: 1.05em; font-weight: 600; letter-spacing: -0.01em; }
 .status-bar { gap: 16px; color: var(--text-dim); align-items: center; }
 .status-dot { width: 8px; height: 8px; background: var(--line-strong); }
+/* RPM 값 색은 차트 선과 맞춘다 — 외측 흰색, 내측 회색. */
+.outer-color { color: #ffffff; } .inner-color { color: #a3a3a3; } .time-color { color: var(--text); }
+button:disabled { opacity: .35; }
 
 .card, .metric-card, .chart-card, .sensor-card, .metric-paper, .cam-card, .live-strip {
   border: 1px solid var(--line); box-shadow: none; }
@@ -3140,18 +3151,18 @@ header h1 { font-size: 1.05em; font-weight: 600; letter-spacing: -0.01em; }
 .func-desc, .I5-gauge .col, .summary-row .pair { background: var(--fill-soft); }
 
 select, input[type="number"], input[type="text"] {
-  background: #fff; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text); }
-select:focus, input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(29,78,216,.12); }
+  background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text); }
+select:focus, input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(255,255,255,.15); }
 
-button { font-weight: 500; border: 1px solid var(--line-strong); background: #fff; color: var(--text);
+button { font-weight: 500; border: 1px solid var(--line-strong); background: transparent; color: var(--text);
   transition: background .15s, border-color .15s; }
-button:hover { opacity: 1; background: var(--fill-soft); border-color: #9ca3af; }
-.btn-connect, .btn-start, .cam-toggle { background: var(--blue); border-color: var(--blue); color: #fff; }
-.btn-connect:hover, .btn-start:hover { background: #1e40af; }
-.btn-disconnect, .btn-refresh { background: #fff; color: var(--text); }
-.btn-test { background: #fff; color: var(--orange); border-color: #f3c99b; }
-.btn-stop, .cam-toggle.off { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn-stop:hover { background: #a10d25; }
+button:hover { opacity: 1; background: var(--fill-soft); border-color: #737373; }
+.btn-connect, .btn-start, .cam-toggle { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.btn-connect:hover, .btn-start:hover { background: var(--primary-hover); }
+.btn-disconnect, .btn-refresh { background: transparent; color: var(--text); }
+.btn-test { background: transparent; color: var(--orange); border-color: rgba(245,158,11,.5); }
+.btn-stop, .cam-toggle.off { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+.btn-stop:hover { background: var(--danger-hover); }
 
 /* 그리드 칸이 내용(Plotly·select) 폭 밑으로 줄지 않아 1,024px 에서 가로 스크롤이 생겼다. */
 .main > *, .cam-chart-row > *, .monitor > * { min-width: 0; }
@@ -3167,18 +3178,18 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
 #spacebioPanel .sb-row span:last-child { color: var(--text); font-family: var(--mono); font-size: 12.5px; }
 #spacebioPanel .sb-readouts { background: var(--fill-soft); border: 1px solid var(--line); padding: 8px 10px; }
 #spacebioPanel #resistanceValue { font-size: 15px; font-weight: 600; }
-#spacebioPanel input, #spacebioPanel select { background: #fff; border: 1px solid var(--line-strong); color: var(--text); }
-#spacebioPanel button { background: #fff; color: var(--text); border: 1px solid var(--line-strong); font-weight: 500; }
+#spacebioPanel input, #spacebioPanel select { background: var(--field); border: 1px solid var(--line-strong); color: var(--text); }
+#spacebioPanel button { background: transparent; color: var(--text); border: 1px solid var(--line-strong); font-weight: 500; }
 #spacebioPanel button:hover:not(:disabled) { background: var(--fill-soft); }
-#spacebioPanel button.sb-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-#spacebioPanel button.sb-primary:hover:not(:disabled) { background: #1e40af; }
-#spacebioPanel button.sb-danger { background: var(--accent); border-color: var(--accent); color: #fff; width: 100%; padding: 9px; }
-#spacebioPanel .sb-badge { background: #fef3c7; color: #92400e; font-weight: 600; }
-#spacebioPanel .sb-badge.sb-live { background: #dcfce7; color: #166534; }
+#spacebioPanel button.sb-primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+#spacebioPanel button.sb-primary:hover:not(:disabled) { background: var(--primary-hover); }
+#spacebioPanel button.sb-danger { background: var(--accent); border-color: var(--accent); color: #ffffff; width: 100%; padding: 9px; }
+#spacebioPanel .sb-badge { background: rgba(245,158,11,.15); color: #fbbf24; font-weight: 600; }
+#spacebioPanel .sb-badge.sb-live { background: rgba(34,197,94,.15); color: #4ade80; }
 #spacebioPanel .sb-sec { border-top-color: var(--line); }
 #spacebioPanel .sb-hint.warn { color: var(--orange); }
-#spacebioPanel .sb-danger-zone { background: #fef2f2; border-color: #fecaca; }
-#spacebioPanel .sb-danger-zone code { background: #fff; border: 1px solid #fecaca; }
+#spacebioPanel .sb-danger-zone { background: var(--danger-soft); border-color: var(--danger-line); }
+#spacebioPanel .sb-danger-zone code { background: var(--field); border: 1px solid var(--danger-line); color: var(--text); }
 #spacebioPanel #spacebioEvents { background: var(--fill-soft); border: 1px solid var(--line); font-family: var(--mono); }
 #spacebioArchive .sb-arch-row { border-bottom-color: var(--line); }
 
@@ -3188,7 +3199,7 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
 #spacebioPanel .sb-runsum { font-family: var(--mono); color: var(--text-dim); opacity: 1; }
 
 /* 클릭하면 펼쳐지는 설정. <details> 라 키보드(Enter/Space)로도 열린다. */
-#spacebioPanel details.sb-drop { margin-top: 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+#spacebioPanel details.sb-drop { margin-top: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 #spacebioPanel .sb-drop-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px;
   cursor: pointer; list-style: none; user-select: none; font-size: 12.5px; font-weight: 600; color: var(--text); }
 #spacebioPanel .sb-drop-head::-webkit-details-marker { display: none; }
@@ -3202,7 +3213,7 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
 #spacebioPanel .sb-drop-body { padding: 4px 12px 12px; border-top: 1px solid var(--line); }
 #spacebioPanel .sb-drop-body .sb-sec:first-of-type { margin-top: 8px; }
 #spacebioPanel .sb-sub-title { margin-top: 10px; }
-#spacebioPanel .sb-danger-zone details.sb-drop { border-color: #fecaca; }
+#spacebioPanel .sb-danger-zone details.sb-drop { border-color: var(--danger-line); }
 
 /* ── 직사각형 타일 배치 (2026-10-29 2차) ─────────────────────────────────
    설정을 펼치면 같은 줄 카드가 함께 늘어나 열 높이가 1,620 / 920 / 2,509px 로
@@ -3255,9 +3266,14 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
 <script>
 // 차트 색은 baseline 줄(어두운 배경용)에 박혀 있다 — 줄을 고치지 않고 그려진 뒤에 바꾼다.
 // 실패해도 화면 기능은 그대로여야 하므로 차트마다 따로 감싼다.
-const UI_SERIES_COLORS = { '#4cc9f0': '#1d4ed8', '#0cca4a': '#15803d', '#f8961e': '#d97706', '#888': '#9ca3af' };
+// 주 계열은 흰색, 함께 그려지는 두 번째 계열은 회색, 기준선은 짙은 회색 — 흑백으로도 구분된다.
+const UI_SERIES_COLORS = { '#4cc9f0': '#ffffff', '#0cca4a': '#a3a3a3', '#f8961e': '#a3a3a3', '#888': '#525252' };
+const UI_SPHERE_SCALE = [[0, '#404040'], [1, '#ffffff']];
+// 막대 차트(밴드 D)는 선이 아니라 채움 색을 쓴다.
+const UI_FILL_COLORS = { 'rgba(76, 201, 240, 0.7)': 'rgba(255, 255, 255, 0.85)',
+                         'rgba(248, 150, 30, 0.7)': 'rgba(115, 115, 115, 0.85)' };
 function uiApplyChartTheme() {
-  const grid = '#eef0f3', tick = '#6b7280', label = '#374151';
+  const grid = '#262626', tick = '#a3a3a3', label = '#e5e5e5';
   if (window.Chart && Chart.getChart) {
     document.querySelectorAll('canvas').forEach((cv) => {
       try {
@@ -3273,6 +3289,8 @@ function uiApplyChartTheme() {
         chart.data.datasets.forEach((d) => {
           const c = UI_SERIES_COLORS[String(d.borderColor).toLowerCase()];
           if (c) d.borderColor = c;
+          const fill = UI_FILL_COLORS[String(d.backgroundColor)];
+          if (fill) d.backgroundColor = fill;
         });
         chart.update('none');
       } catch (e) { /* 테마 실패는 무시 — 기본 색으로 남는다 */ }
@@ -3283,10 +3301,28 @@ function uiApplyChartTheme() {
     // 고쳐 둬야 다음 갱신 때 어두운 색으로 돌아가지 않는다.
     if (typeof sphereLayout !== 'undefined' && window.Plotly) {
       const axis = { color: tick, gridcolor: grid };
-      Object.assign(sphereLayout, { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff' });
-      Object.assign(sphereLayout.scene, { bgcolor: '#ffffff' });
+      Object.assign(sphereLayout, { paper_bgcolor: '#000000', plot_bgcolor: '#000000' });
+      Object.assign(sphereLayout.scene, { bgcolor: '#000000' });
       ['xaxis', 'yaxis', 'zaxis'].forEach((k) => Object.assign(sphereLayout.scene[k], axis));
       Plotly.relayout('sphereDiv', sphereLayout);
+      // 점 색은 trace 에 있고, refreshSphere() 가 2초마다 Viridis(시간 순서) 로 새로 그린다.
+      // 시간 정보는 살리고 흑백에 맞춰 회색→흰색(최근일수록 흰색) 단계로 바꾼다.
+      // 이미 바뀐 그림은 건드리지 않아 afterplot → restyle 이 되풀이되지 않는다.
+      const sphereDiv = document.getElementById('sphereDiv');
+      const toGrey = () => {
+        const tr = sphereDiv.data && sphereDiv.data[0];
+        if (!tr || !tr.marker) return;
+        if (Array.isArray(tr.marker.color) && tr.marker.colorscale !== UI_SPHERE_SCALE) {
+          Plotly.restyle(sphereDiv, { 'marker.colorscale': [UI_SPHERE_SCALE] });
+        } else if (typeof tr.marker.color === 'string' && tr.marker.color !== '#ffffff') {
+          Plotly.restyle(sphereDiv, { 'marker.color': '#ffffff' });
+        }
+      };
+      if (!sphereDiv.dataset.uiGrey) {
+        sphereDiv.dataset.uiGrey = '1';
+        sphereDiv.on('plotly_afterplot', toGrey);
+      }
+      toGrey();
     }
   } catch (e) { /* 무시 */ }
 }
