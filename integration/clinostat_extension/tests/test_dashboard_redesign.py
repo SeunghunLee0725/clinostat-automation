@@ -67,7 +67,7 @@ def test_sensor_settings_live_in_the_drop(work, element_id):
 
 def test_drop_opens_on_click_not_drag(work):
     """<details>/<summary> 는 클릭으로 열린다. 드래그 핸들러를 두지 않는다."""
-    assert work.count('<details class="sb-drop"') >= 3       # 센서 · 펌프 템플릿 · 비상정지 해제
+    assert work.count('<details class="sb-drop"') >= 2       # 센서 · 펌프 템플릿
     assert '<summary class="sb-drop-head">' in work
     for drag in ("draggable=", "ondragstart", "'dragstart'", "pointerdown"):
         assert drag not in work
@@ -89,10 +89,26 @@ def test_sensor_drop_summary_shows_applied_settings(work):
     assert "resistanceSettingSummary" in _between(work, "function spacebioRenderStatus", "\n}")
 
 
-def test_estop_button_is_always_visible_and_reset_is_folded(work):
-    estop = _between(work, "<h3>펌프 비상정지</h3>", '<div class="sb-card sb-chart-card"')
-    assert 'id="pumpEmergencyStop"' not in _drop(estop)
-    assert 'id="pumpResetAcknowledgement"' in _drop(estop)
+def test_estop_card_is_gone_but_a_latch_shows_the_reset(work):
+    """비상정지 카드는 없앴다(2026-10-30). 래치가 남아 있으면 풀 길이 있어야 하므로
+    해제 줄은 평소 숨겨 두고 래치됐을 때만 보인다."""
+    assert "<h3>펌프 비상정지</h3>" not in work
+    banner = _between(work, 'id="pumpLatchBanner"', "</div>\n    </div>")
+    assert banner.startswith('id="pumpLatchBanner" hidden')
+    assert 'id="pumpResetAcknowledgement"' in banner and 'id="pumpResetEmergencyStop"' in banner
+    render = _between(work, "function spacebioRenderStatus", "\n}")
+    assert "sbEl('pumpLatchBanner').hidden = !anyLatched" in render
+
+
+def test_resistance_chart_lives_inside_the_sensor_card(work):
+    card = _sensor_card(work)
+    assert 'id="resistanceChart"' in card
+    assert "<h3>저항 추이</h3>" not in work
+
+
+def test_sensor_card_spans_the_row_and_pumps_share_the_next(work):
+    assert "#spacebioPanel .ui-device-grid > .sb-sensor-card { grid-column: 1 / -1; }" in _theme(work)
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in _tile_css(work)
 
 
 def test_pump_cards_are_not_folded_away(work):
@@ -141,7 +157,7 @@ def test_wide_layout_pins_the_three_columns_to_the_viewport(work):
 
 def test_device_cards_share_equal_cells_and_scroll_inside(work):
     css = _tile_css(work)
-    assert "grid-template-rows: repeat(2, minmax(0, 1fr))" in css
+    assert "grid-template-rows: minmax(0, 1fr) minmax(0, 1fr)" in css
     assert "#spacebioPanel .ui-device-grid > .sb-card" in css
 
 
@@ -154,7 +170,7 @@ def test_stop_all_stays_pinned_at_the_bottom_of_the_left_column(work):
 def test_tile_layout_regroups_cards_at_runtime(work):
     fn = _between(work, "function uiApplyTileLayout", "\n}")
     assert "if (!panel) return;" in fn, "배치 실패가 기능을 막으면 안 된다"
-    for cls in ("ui-device-grid", "ui-row-chart", "ui-row-records"):
+    for cls in ("ui-device-grid", "ui-row-records"):
         assert cls in fn
     assert "spacebioArchive" in fn and "spacebioEvents" in fn
     assert "uiApplyTileLayout();" in work
@@ -200,3 +216,9 @@ def test_chart_lines_are_white_on_black(work):
     assert "'#4cc9f0': '#ffffff'" in work, "주 계열선은 흰색"
     assert re.search(r"paper_bgcolor: '#000000'", fn)
     assert "marker" in fn, "중력벡터 점도 흰색이어야 한다"
+
+
+def test_panel_title_and_subtitle_are_gone(work):
+    """2026-10-30: 'SpaceBio Integration' 제목과 부제를 지웠다."""
+    assert "<h2>SpaceBio Integration</h2>" not in work
+    assert 'id="spacebioSubtitle"' not in work

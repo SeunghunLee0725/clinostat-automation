@@ -1833,13 +1833,14 @@ window.addEventListener('resize', scheduleCameraResize);
 </style>
 
 <div id="spacebioPanel">
-  <h2>SpaceBio Integration</h2>
-  <div class="sb-sub" id="spacebioSubtitle">저항센서 · 펌프 · 통합 세션 기록</div>
+  <!-- 패널 제목·부제는 없앴다(2026-10-30) — 카드 제목만으로 충분하다. -->
 
   <div class="sb-grid">
     <!-- Gateway 카드를 여기로 합쳤다. 세션은 측정 시작/정지가 알아서 열고 닫으므로
          운영자가 볼 것은 "실험명 → 측정 시작"과 "어디에 저장되는가" 둘뿐이다. -->
-    <div class="sb-card">
+    <!-- 저항 추이 차트를 이 카드 안으로 합쳤다(2026-10-30) — 값·조작과 그래프를 한 눈에. -->
+    <div class="sb-card sb-sensor-card">
+     <div class="sb-sensor-main">
       <h3>저항센서 <span class="sb-badge" id="resistanceModeBadge">-</span></h3>
       <!-- 실기 BLE 센서 전용. CSV 재생·합성 신호·USB 시리얼 모드는 화면에서 제거했다
            (백엔드에는 남아 있어 필요하면 API로 직접 설정할 수 있다). -->
@@ -1878,6 +1879,13 @@ window.addEventListener('resize', scheduleCameraResize);
           <div class="sb-hint" id="resistanceSettingHint"></div>
         </div>
       </details>
+     </div>
+     <div class="sb-sensor-chart">
+      <div class="sb-sec-title">저항 추이</div>
+      <!-- Chart.js가 maintainAspectRatio:false 라 컨테이너 높이를 그대로 따른다.
+           높이는 카드가 정한다(.sb-sensor-chart 가 flex 로 채운다). -->
+      <div class="sb-chart-wrap"><canvas id="resistanceChart"></canvas></div>
+     </div>
     </div>
 
     <div class="sb-card">
@@ -1972,44 +1980,22 @@ window.addEventListener('resize', scheduleCameraResize);
       </div>
     </template>
 
-    <!-- 비상정지는 펌프별이 아니라 **전체**다. 실수로 누르면 대가가 크고, 해제에는
-         확인 문구가 필요해 흐름 자체가 다르므로 일반 조작 카드와 갈라 놓는다.
-         본문에 pump_id 를 넣지 않으면 게이트웨이가 모든 펌프에 적용한다.
-         버튼은 항상 보이고, 해제 절차만 접는다. -->
-    <div class="sb-card sb-estop-card">
-      <h3>펌프 비상정지</h3>
-      <div class="sb-readouts">
-        <div class="sb-row"><span>래치</span><span id="pumpEstopSummary">해제됨</span></div>
-      </div>
-      <div class="sb-danger-zone">
-        <div class="sb-hint">모든 펌프를 함께 멈추고 래치합니다. 해제도 함께 풀립니다.</div>
-        <div class="sb-actions">
-          <button id="pumpEmergencyStop" class="sb-danger">비상 정지 — 모든 펌프</button>
-        </div>
-        <details class="sb-drop">
-          <summary class="sb-drop-head"><span>비상정지 해제</span></summary>
-          <div class="sb-drop-body">
-            <!-- 확인 문구는 오타 방지용 안전장치지 암호가 아니다. 화면에 안 보이면
-                 무엇을 입력해야 하는지 알 수 없어 해제 버튼이 영원히 비활성으로 남는다. -->
-            <label for="pumpResetAcknowledgement">해제하려면 다음을 그대로 입력 —
-              <code id="pumpResetAckHint">RESET_SIMULATED_PUMP_ESTOP</code></label>
-            <input id="pumpResetAcknowledgement" type="text"
-                   placeholder="RESET_SIMULATED_PUMP_ESTOP">
-            <div class="sb-actions">
-              <button id="pumpResetEmergencyStop" disabled>비상정지 해제</button>
-            </div>
-          </div>
-        </details>
+    <!-- 비상정지 카드는 없앴다(2026-10-30). 비상정지 명령은 /console 에 남아 있고,
+         STOP ALL 은 일반 정지를 보낸다. 다만 래치가 이미 걸려 있으면(이전 비상정지·세션
+         복구) 풀 길이 있어야 하므로, 래치됐을 때만 이 해제 줄이 나타난다.
+         본문에 pump_id 를 넣지 않으면 게이트웨이가 모든 펌프에 적용한다. -->
+    <div class="sb-card sb-latch-banner" id="pumpLatchBanner" hidden>
+      <h3>펌프 래치됨 — 해제 필요</h3>
+      <!-- 확인 문구는 오타 방지용 안전장치지 암호가 아니다. 화면에 안 보이면
+           무엇을 입력해야 하는지 알 수 없어 해제 버튼이 영원히 비활성으로 남는다. -->
+      <label for="pumpResetAcknowledgement">해제하려면 다음을 그대로 입력 —
+        <code id="pumpResetAckHint">RESET_SIMULATED_PUMP_ESTOP</code></label>
+      <input id="pumpResetAcknowledgement" type="text"
+             placeholder="RESET_SIMULATED_PUMP_ESTOP">
+      <div class="sb-actions">
+        <button id="pumpResetEmergencyStop" class="sb-danger" disabled>래치 해제</button>
       </div>
     </div>
-  </div>
-
-  <div class="sb-card sb-chart-card" style="margin-top:14px">
-    <h3>저항 추이</h3>
-    <!-- Chart.js가 maintainAspectRatio:false 라 컨테이너 높이를 그대로 따른다.
-         높이 제약이 없으면 무한정 커지므로 클리노스텟 RPM 그래프(.chart-card
-         360px − padding − footer ≈ 280px)와 같은 크기로 고정한다. -->
-    <div class="sb-chart-wrap"><canvas id="resistanceChart"></canvas></div>
   </div>
 
   <div class="sb-card" style="margin-top:14px">
@@ -2411,11 +2397,9 @@ function spacebioRenderStatus(status) {
   pumps.forEach(spacebioRenderPump);
   spacebioSyncPumpControls();   // 모드·보정에 맞춰 못 쓰는 컨트롤을 잠근다
   if (staleBefore) spacebioSetStale(true);   // 새로 만든 카드도 stale 잠금을 따른다
-  // 비상정지 카드는 전체를 요약한다 — 어느 하나라도 래치면 해제가 필요하다.
+  // 어느 하나라도 래치면 해제 줄을 보여준다. 평소에는 숨긴다.
   const anyLatched = pumps.some((p) => !!p.estop_latched);
-  const summary = sbEl('pumpEstopSummary');
-  summary.textContent = anyLatched ? '래치됨 — 해제 필요' : '해제됨';
-  summary.classList.toggle('sb-latched', anyLatched);
+  sbEl('pumpLatchBanner').hidden = !anyLatched;
 
   const sensor = status.sensor || {};
   // 센서 배지도 실제 모드를 반영한다.
@@ -2591,11 +2575,6 @@ async function spacebioInit() {
     spacebioLog(finished ? '측정 정지 — 기록 저장 완료 (' + finished + ')' : '측정 정지');
   };
   // 펌프 카드의 핸들러는 카드를 만들 때 붙는다(spacebioBuildPumpCard).
-  // 비상정지는 본문에 pump_id 를 넣지 않는다 → 게이트웨이가 모든 펌프에 적용한다.
-  sbEl('pumpEmergencyStop').onclick = async () => {
-    await spacebioFetch('/api/spacebio/pump/emergency-stop', { method: 'POST', body: {} });
-    spacebioLog('비상 정지 — 모든 펌프 래치됨');
-  };
   sbEl('pumpResetEmergencyStop').onclick = spacebioResetEstop;
 
 
@@ -3220,12 +3199,21 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
    들쭉날쭉했다. 넓은 화면에서는 세 열을 화면 높이에 고정해 바깥 윤곽을 직사각형으로
    만들고, 카드 칸 크기는 그대로 둔 채 넘치는 내용은 카드·열 안에서 스크롤한다. */
 /* 좁은 화면: 열 고정은 하지 않고 줄마다 같은 높이의 격자로만 묶는다. */
-#spacebioPanel .ui-device-grid, #spacebioPanel .ui-row-chart, #spacebioPanel .ui-row-records {
+#spacebioPanel .ui-device-grid, #spacebioPanel .ui-row-records {
   display: grid; gap: 12px; margin-top: 12px;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-#spacebioPanel .ui-row-chart > .sb-card, #spacebioPanel .ui-row-records > .sb-card { margin-top: 0 !important; }
+#spacebioPanel .ui-row-records > .sb-card { margin-top: 0 !important; }
+/* 저항센서 카드: 왼쪽 값·조작, 오른쪽 저항 추이. 좁으면 위아래로 쌓인다. */
+#spacebioPanel .sb-sensor-card { display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+#spacebioPanel .ui-device-grid > .sb-sensor-card { grid-column: 1 / -1; }
+#spacebioPanel .sb-sensor-chart { display: flex; flex-direction: column; min-height: 220px; min-width: 0; }
+#spacebioPanel .sb-sensor-chart .sb-chart-wrap { flex: 1 1 auto; height: auto !important; min-height: 200px; }
+#spacebioPanel .sb-latch-banner { grid-column: 1 / -1; border-color: var(--danger-line); background: var(--danger-soft); }
+#spacebioPanel .sb-latch-banner[hidden] { display: none; }
+#spacebioPanel .sb-latch-banner h3 { color: var(--accent); }
 @media (min-width: 1600px) {
-  #spacebioPanel .ui-device-grid, #spacebioPanel .ui-row-chart, #spacebioPanel .ui-row-records { margin-top: 0; }
+  #spacebioPanel .ui-device-grid, #spacebioPanel .ui-row-records { margin-top: 0; }
   body { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
   header { flex: none; }
   .main {
@@ -3242,24 +3230,23 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
   .monitor .metrics-grid { flex: 1 1 auto; min-height: 210px; }
   .monitor .metrics-grid .metric-paper { height: auto !important; }
 
-  /* 오른쪽: 장치 카드 2×2 는 같은 크기 칸, 그 아래 차트·이벤트, 기록 줄. */
+  /* 오른쪽: 저항센서(한 줄 전체) / 펌프 1·2(같은 줄, 같은 크기) / 이벤트·기록 관리·기록. */
   #spacebioPanel { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
   #spacebioPanel > h2, #spacebioPanel > .sb-sub { flex: none; margin-bottom: 0; }
   #spacebioPanel .ui-device-grid {
     flex: 1 1 0; min-height: 460px; display: grid; gap: 12px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   }
+  #spacebioPanel .sb-sensor-chart { min-height: 0; }
+  #spacebioPanel .sb-sensor-chart .sb-chart-wrap { min-height: 0; }
   #spacebioPanel .ui-device-grid > .sb-card,
   #spacebioPanel .ui-device-grid #pumpCards > .sb-card { min-height: 0; overflow-y: auto; margin: 0; }
-  #spacebioPanel .ui-row-chart, #spacebioPanel .ui-row-records {
-    flex: none; display: grid; gap: 12px; }
-  #spacebioPanel .ui-row-chart { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); height: 210px; }
-  #spacebioPanel .ui-row-records { grid-template-columns: repeat(2, minmax(0, 1fr)); height: 220px; }
-  #spacebioPanel .ui-row-chart > .sb-card, #spacebioPanel .ui-row-records > .sb-card {
+  #spacebioPanel .ui-row-records { flex: none; display: grid; gap: 12px; height: 220px;
+    grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #spacebioPanel .ui-row-records > .sb-card {
     margin: 0 !important; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
-  #spacebioPanel .ui-row-chart .sb-chart-wrap { height: auto !important; flex: 1 1 0; min-height: 0; }
-  #spacebioPanel .ui-row-chart #spacebioEvents { max-height: none; flex: 1 1 0; }
+  #spacebioPanel .ui-row-records #spacebioEvents { max-height: none; flex: 1 1 0; }
   #spacebioArchive .sb-arch-list { max-height: none; }
 }
 </style>
@@ -3336,24 +3323,19 @@ function uiApplyTileLayout() {
   if (grid && !panel.querySelector('.ui-device-grid')) {
     const devices = document.createElement('div');
     devices.className = 'ui-device-grid';
-    [card('resistanceModeBadge'), document.getElementById('pumpCards'), card('pumpEmergencyStop')]
+    [card('resistanceModeBadge'), document.getElementById('pumpCards'),
+     document.getElementById('pumpLatchBanner')]
       .filter(Boolean).forEach((el) => devices.appendChild(el));
     grid.parentNode.insertBefore(devices, grid);
 
-    const chartRow = document.createElement('div');
-    chartRow.className = 'ui-row-chart';
-    [card('resistanceChart'), card('spacebioEvents')].filter(Boolean)
-      .forEach((el) => chartRow.appendChild(el));
-    devices.parentNode.insertBefore(chartRow, devices.nextSibling);
-
-    // 기록 카드는 접힘(▸ 기록 상태) 안에 있다 — 타일 줄에서는 꺼내 기록 관리 옆에 둔다.
+    // 기록 카드는 접힘(▸ 기록 상태) 안에 있다 — 타일 줄에서는 꺼내 이벤트·기록 관리 옆에 둔다.
     const recordsRow = document.createElement('div');
     recordsRow.className = 'ui-row-records';
     const records = card('spacebioSessionRecordingState');
     const fold = records && records.closest('details.sb-fold');
-    [document.getElementById('spacebioArchive'), records].filter(Boolean)
+    [card('spacebioEvents'), document.getElementById('spacebioArchive'), records].filter(Boolean)
       .forEach((el) => recordsRow.appendChild(el));
-    chartRow.parentNode.insertBefore(recordsRow, chartRow.nextSibling);
+    devices.parentNode.insertBefore(recordsRow, devices.nextSibling);
     if (fold && !fold.querySelector('.sb-card')) fold.remove();
     if (!grid.children.length) grid.remove();
   }

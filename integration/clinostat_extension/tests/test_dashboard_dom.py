@@ -82,9 +82,10 @@ NEW_IDS = [
     "resistanceValue", "resistanceDelta", "resistanceAdc",
     "resistanceTemperature", "resistanceBattery", "resistanceChart",
     # 비상정지는 펌프 전체에 걸리므로 카드 밖의 고정 요소다.
-    "pumpEmergencyStop", "pumpResetAcknowledgement", "pumpResetEmergencyStop",
-    "pumpEstopSummary", "pumpCards", "pumpCardTemplate",
-    "spacebioJumpLink", "resistanceModeBadge", "spacebioSubtitle",
+    # 비상정지 카드는 없앴다(2026-10-30). 래치 해제 줄만 남아 래치됐을 때 나타난다.
+    "pumpResetAcknowledgement", "pumpResetEmergencyStop",
+    "pumpLatchBanner", "pumpCards", "pumpCardTemplate",
+    "spacebioJumpLink", "resistanceModeBadge",
     "spacebioRecordingHint", "spacebioDataPath", "spacebioStorageHint",
     "resistanceRref", "resistanceAvgFactor", "resistanceSettingHint",
 ]
@@ -146,10 +147,10 @@ def test_pump_card_hz_input_defaults_and_bounds(work):
     assert 'value="600"' in hz and 'min="1"' in hz and 'max="1000"' in hz
 
 
-def test_emergency_stop_targets_every_pump(work):
-    """비상정지·해제 본문에 pump_id 가 없어야 게이트웨이가 모든 펌프에 적용한다."""
-    estop = work[work.index("sbEl('pumpEmergencyStop').onclick"):][:300]
-    assert "/api/spacebio/pump/emergency-stop" in estop and "pump_id" not in estop
+def test_latch_reset_targets_every_pump(work):
+    """해제 본문에 pump_id 가 없어야 게이트웨이가 모든 펌프에 적용한다.
+    비상정지 버튼은 대시보드에서 없앴다(2026-10-30) — 명령은 /console 에 남아 있다."""
+    assert 'id="pumpEmergencyStop"' not in work
     reset = work[work.index("async function spacebioResetEstop"):][:600]
     assert "pump_id" not in reset
 
@@ -199,7 +200,7 @@ def test_panel_only_calls_proxied_routes(work):
     assert "127.0.0.1" not in work
     for path in ("/api/spacebio/sensor/configure", "/api/spacebio/sensor/start",
                  "/api/spacebio/sensor/stop", "/api/spacebio/pump/dispense",
-                 "/api/spacebio/pump/stop", "/api/spacebio/pump/emergency-stop",
+                 "/api/spacebio/pump/stop",
                  "/api/spacebio/pump/reset-emergency-stop",
                  "/api/spacebio/session/start", "/api/spacebio/session/finish",
                  "/api/spacebio/status", "/ws/spacebio"):
