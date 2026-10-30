@@ -23,6 +23,7 @@
 #include <PubSubClient.h>
 #include "pump_config.h"
 #include "sensor_ads1115.h"
+#include "sensor_muscle.h"
 
 // (펌프 번호 0-base, 명령 문자열)
 typedef void (*CommandHandler)(int, const String&);
@@ -61,6 +62,18 @@ public:
   bool publishSensor(const uint8_t* data, size_t len) {
     if (!_mqtt.connected()) return false;
     return _mqtt.publish(TOPIC_SENSOR, data, len);
+  }
+
+  // 근육 응답 캡처 조각(바이너리, ≤396 B). sensor_muscle.h 가 5 ms 간격으로 부른다.
+  bool publishEmg(const uint8_t* data, size_t len) {
+    if (!_mqtt.connected()) return false;
+    return _mqtt.publish(TOPIC_EMG, data, len);
+  }
+
+  // 근육 연속 측정 조각 — 64샘플마다(≈115 ms).
+  bool publishEmgStream(const uint8_t* data, size_t len) {
+    if (!_mqtt.connected()) return false;
+    return _mqtt.publish(TOPIC_EMG_STREAM, data, len);
   }
 
   // 명령 응답 — status 와 다른 토픽으로 보낸다(게이트웨이 파서와 섞이지 않게).

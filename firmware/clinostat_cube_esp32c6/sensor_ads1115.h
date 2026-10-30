@@ -57,7 +57,7 @@ public:
   }
 
   void tick() {
-    if (!_enabled) return;
+    if (!_enabled || _suspended) return;
     const uint32_t now = millis();
     if (!_ready) {
       if (now - _lastProbeMs >= SENSOR_PROBE_MS) probe();
@@ -95,7 +95,18 @@ public:
            " sent=" + String(_sentBatches) +
            " dropped=" + String(_droppedBatches) +
            " readerr=" + String(_readErrors) +
+           (_suspended ? " (근육 캡처 중 일시정지)" : "") +
            " sda=" + String(SENSOR_SDA_GPIO) + " scl=" + String(SENSOR_SCL_GPIO);
+  }
+
+  // 근육 캡처(sensor_muscle.h)가 같은 ADS1115 를 잠시 빌린다. 버스는 센서가 꺼져 있어도 연다.
+  // 돌려받으면 저항센서 설정을 다시 쓰고, 다음 읽기를 20 ms 뒤로 미뤄 새 변환만 읽는다.
+  void suspend() { startBus(); _suspended = true; _batchCount = 0; }
+  void resume() {
+    _suspended = false;
+    if (!_enabled || !_ready) return;
+    if (!writeConfig()) { _ready = false; _lastProbeMs = millis(); return; }
+    _lastSampleMs = millis();
   }
 
   static bool usesGpio(int gpio) { return gpio == SENSOR_SDA_GPIO || gpio == SENSOR_SCL_GPIO; }
@@ -103,6 +114,7 @@ public:
 private:
   Preferences*    _prefs = nullptr;
   SensorPublishFn _publish = nullptr;
+  bool     _suspended = false;
   bool     _enabled = true, _ready = false, _busStarted = false, _missingLogged = false;
   uint32_t _lastProbeMs = 0, _lastSampleMs = 0;
   uint32_t _sentBatches = 0, _droppedBatches = 0, _readErrors = 0;

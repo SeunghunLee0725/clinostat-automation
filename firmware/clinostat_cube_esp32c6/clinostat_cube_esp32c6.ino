@@ -27,6 +27,10 @@
  *   Nano 33 BLE 를 빼고 ADS1115 를 D4/D5(I²C)에 직결. `s25007/board1/sensor` 로 발행.
  *   상세는 sensor_ads1115.h. 시리얼/MQTT 명령 `sensor`, `sensor:on|off`.
  *
+ * ── 근육 응답 전압 (2026-10-30) ───────────────────────────────────────────
+ *   같은 ADS1115 의 AIN2−AIN3(opamp 출력−기준). `emg:cap:<ms>` 로 캡처해
+ *   `s25007/board1/emg` 로 발행. 상세는 sensor_muscle.h.
+ *
  * ── 라이브러리 ────────────────────────────────────────────────────────────
  *   PubSubClient  (AccelStepper 는 더 이상 쓰지 않는다 — 자체 엔진으로 대체)
  *
@@ -40,6 +44,7 @@
 #include "pump_drive.h"
 #include "pump_net.h"
 #include "sensor_ads1115.h"
+#include "sensor_muscle.h"
 
 // ---- 전역 (pump_commands.h 가 extern 으로 참조) ----
 PumpConfig  gCfg;
@@ -47,6 +52,7 @@ PumpDrive   gPumps[PUMP_COUNT];
 Preferences gPrefs;
 PumpNet     gNet;
 SensorAds1115 gSensor;
+MuscleCapture gMuscle;
 bool        gLedState = false;
 int         gLedGpio  = LED_BUILTIN;      // XIAO ESP32-C6 내장 LED
 
@@ -63,6 +69,14 @@ static void reply(const String& msg) {
 
 static bool publishSensorBatch(const uint8_t* data, size_t len) {
   return gNet.publishSensor(data, len);
+}
+
+static bool publishEmgChunk(const uint8_t* data, size_t len) {
+  return gNet.publishEmg(data, len);
+}
+
+static bool publishEmgStreamChunk(const uint8_t* data, size_t len) {
+  return gNet.publishEmgStream(data, len);
 }
 
 static unsigned long lastStatusMs = 0;
@@ -117,6 +131,7 @@ void setup() {
 
   gNet.begin(&gCfg, handleMqttCommand);
   gSensor.begin(&gPrefs, publishSensorBatch);
+  gMuscle.begin(&gPrefs, &gSensor, publishEmgChunk, publishEmgStreamChunk, reply);
 }
 
 void loop() {
@@ -127,6 +142,7 @@ void loop() {
   gNet.tick(anyPumpRunning());   // 구동 중엔 블로킹 재접속을 미룬다 (펄스 타이밍 우선)
   for (int i = 0; i < PUMP_COUNT; i++) gPumps[i].tick();
   gSensor.tick();                // I²C 읽기 ≈0.1 ms, 20 ms 마다
+  gMuscle.tick();                // 캡처 중에만 일한다 — I²C 한 번 ≈0.1 ms
 
   if (millis() - lastStatusMs >= 2000) {
     lastStatusMs = millis();
