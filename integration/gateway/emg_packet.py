@@ -1,6 +1,6 @@
 """근육 응답 전압 캡처 패킷 파서 (2026-10-30).
 
-펌프 보드(ESP32-C6)가 ADS1115 AIN2−AIN3 차동 입력을 단발 변환으로 연속 읽어
+펌프 보드(ESP32-C6)가 근육 전용 ADS1115(0x49) AIN0−AIN1 차동 입력을 단발 변환으로 연속 읽어
 (`emg:cap:<ms>`) 캡처 하나를 조각으로 나눠 `s25007/board1/emg` 로 발행한다
 (firmware/clinostat_cube_esp32c6/sensor_muscle.h). **펌웨어 struct 가 바뀌면 같이 고친다.**
 

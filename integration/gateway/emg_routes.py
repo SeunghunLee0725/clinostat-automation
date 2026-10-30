@@ -7,7 +7,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
-from gateway.emg_monitor import EMG_MS_MAX, EMG_MS_MIN, EmgConflictError, EmgMonitor
+from gateway.emg_monitor import EMG_MS_MAX, EMG_MS_MIN, EmgMonitor
 from gateway.http_support import envelope
 
 router = APIRouter()
@@ -44,7 +44,4 @@ async def emg_stream_read(request: Request):
 
 @router.post("/api/emg/stream")
 async def emg_stream_set(request: Request, body: EmgStreamRequest):
-    # 같은 ADS1115 를 쓰므로 저항 측정이 돌고 있으면 켜지 않는다(끄기는 언제나 허용).
-    if body.on and request.app.state.runtime.sensor_running():
-        raise EmgConflictError("저항 측정 중에는 근육 연속 측정을 켤 수 없다", code="emg_sensor_busy")
     return envelope(request, _monitor(request).set_stream(body.on, body.pga_mv))

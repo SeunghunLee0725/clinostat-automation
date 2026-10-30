@@ -33,7 +33,7 @@ def write_csv(capture: EmgCapture, path: Path) -> None:
 
 
 def _parse_args(argv: Optional[list[str]]) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="근육 응답 전압 캡처(ADS1115 AIN2-AIN3)")
+    p = argparse.ArgumentParser(description="근육 응답 전압 캡처(근육 전용 ADS1115 0x49 AIN0-AIN1)")
     p.add_argument("--host", default="localhost")
     p.add_argument("--port", type=int, default=1883)
     p.add_argument("--ms", type=int, default=500, help="캡처 길이 10~2000 ms")

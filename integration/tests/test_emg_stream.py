@@ -183,14 +183,12 @@ def test_api_stream_on_and_read(tmp_path, fake, clock):
         assert data["requested"] is True and data["mv"]
 
 
-def test_api_stream_refused_while_resistance_measurement_runs(tmp_path, fake, clock, monkeypatch):
+def test_api_stream_runs_alongside_resistance_measurement(tmp_path, fake, clock):
+    """근육은 전용 칩(0x49)으로 옮겼다 — 저항 측정 중에도 연속 측정을 켤 수 있다."""
     app, client = _client(tmp_path, fake, clock)
     with client:
-        monkeypatch.setattr(app.state.runtime, "sensor_running", lambda: True)
-        r = client.post("/api/emg/stream", json={"on": True})
-        assert r.status_code == 409
-        assert r.json()["error"]["code"] == "emg_sensor_busy"
-        assert client.post("/api/emg/stream", json={"on": False}).status_code == 200
+        assert not hasattr(app.state.runtime, "sensor_running")
+        assert client.post("/api/emg/stream", json={"on": True}).status_code == 200
 
 
 def test_board_clock_wrap_restarts_the_window():

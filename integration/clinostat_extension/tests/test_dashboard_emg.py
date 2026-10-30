@@ -93,10 +93,10 @@ def test_stream_polls_the_proxied_route_and_keeps_a_rolling_window(work):
     assert "EMG_STREAM_KEEP_MS" in fn and "stream_id" in fn
 
 
-def test_stream_stops_before_resistance_measurement_starts(work):
-    """같은 ADS1115 를 쓴다 — 저항 측정 시작을 누르면 연속 측정부터 끈다."""
-    hook = _between(work, "sbEl('resistanceStart').addEventListener", "{ capture: true });")
-    assert "emgStreamSet(false)" in hook
+def test_resistance_start_no_longer_stops_the_stream(work):
+    """근육은 전용 칩(0x49)이라 저항 측정 시작이 연속 측정을 끄지 않는다."""
+    assert "sbEl('resistanceStart').addEventListener" not in work
+    assert "저항센서를 잠시 멈추고" not in work
 
 
 def test_capture_is_disabled_while_streaming(work):
