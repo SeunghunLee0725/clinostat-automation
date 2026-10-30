@@ -54,6 +54,9 @@ ROUTE_MAP: dict[str, str] = {
     "/api/spacebio/session/update": "/api/session/update",
     "/api/spacebio/session/finish": "/api/session/finish",
     "/api/spacebio/sessions": "/api/sessions",
+    "/api/spacebio/emg/latest": "/api/emg/latest",
+    "/api/spacebio/emg/capture": "/api/emg/capture",
+    "/api/spacebio/emg/stream": "/api/emg/stream",
 }
 
 #: 기록 관리의 다운로드·삭제는 경로에 session_id가 들어가 ROUTE_MAP(정확 일치)으로

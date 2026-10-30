@@ -80,6 +80,10 @@ EXPECTED_PROXY_ROUTES = {
     ("post", "/api/spacebio/session/start"),
     ("post", "/api/spacebio/session/update"),
     ("post", "/api/spacebio/session/finish"),
+    ("get", "/api/spacebio/emg/latest"),
+    ("post", "/api/spacebio/emg/capture"),
+    ("get", "/api/spacebio/emg/stream"),
+    ("post", "/api/spacebio/emg/stream"),
     ("websocket", "/ws/spacebio"),
 }
 

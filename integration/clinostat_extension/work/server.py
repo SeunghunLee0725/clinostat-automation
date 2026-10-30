@@ -1237,6 +1237,32 @@ async def spacebio_pump_stop(request: Request):
     return await _spacebio_relay(request, "/api/spacebio/pump/stop", {})
 
 
+@app.get("/api/spacebio/emg/latest")
+async def spacebio_emg_latest(request: Request):
+    return await _spacebio_relay(request, "/api/spacebio/emg/latest")
+
+
+@app.post("/api/spacebio/emg/capture")
+async def spacebio_emg_capture(request: Request):
+    """근육 응답 전압 캡처(펌프 보드 ADS1115 AIN2−AIN3). 재시도하지 않는다."""
+    return await _spacebio_relay(
+        request, "/api/spacebio/emg/capture", await request.json()
+    )
+
+
+@app.get("/api/spacebio/emg/stream")
+async def spacebio_emg_stream_read(request: Request):
+    """근육 연속 측정의 최근 구간. 게이트웨이가 이 요청을 keepalive 로 삼는다."""
+    return await _spacebio_relay(request, "/api/spacebio/emg/stream")
+
+
+@app.post("/api/spacebio/emg/stream")
+async def spacebio_emg_stream_set(request: Request):
+    return await _spacebio_relay(
+        request, "/api/spacebio/emg/stream", await request.json()
+    )
+
+
 @app.post("/api/spacebio/pump/step")
 async def spacebio_pump_step(request: Request):
     return await _spacebio_relay(
