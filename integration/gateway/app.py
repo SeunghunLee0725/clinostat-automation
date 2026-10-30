@@ -25,6 +25,8 @@ from starlette.types import ASGIApp
 
 from gateway.api_models import GatewayStatus, StatusMessage, error_envelope
 from gateway.http_support import request_id as extract_request_id
+from gateway.emg_monitor import EmgConflictError, EmgMonitor
+from gateway.emg_routes import router as emg_router
 from gateway.routes import router
 from gateway.runtime import GatewayConfig, GatewayRuntime, SensorConflictError, load_config
 from gateway.sensor_source import SensorSourceError
@@ -111,6 +113,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(SessionNotActiveError, _handle_conflict)
     app.add_exception_handler(InsufficientSpaceError, _handle_conflict)
     app.add_exception_handler(ArchiveConflictError, _handle_conflict)
+    app.add_exception_handler(EmgConflictError, _handle_conflict)
 
     app.add_exception_handler(ArchiveNotFoundError, _handle_not_found)
 
@@ -173,16 +176,27 @@ def create_app(config: GatewayConfig) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         await runtime.startup()
+        emg: EmgMonitor = _app.state.emg
+        if emg.enabled:
+            emg.connect()
         try:
             yield
         finally:
+            emg.disconnect()
             await runtime.shutdown()
 
     app = FastAPI(title="SpaceBio Gateway", lifespan=lifespan)
     app.state.runtime = runtime
+    # 근육 응답 캡처는 펌프 보드(무선)에 붙어 있다 — 실기 무선 구성에서만 브로커에 붙는다.
+    app.state.emg = EmgMonitor(
+        host=config.mqtt_host, port=config.mqtt_port,
+        username=config.mqtt_username, password=config.mqtt_password,
+        enabled=config.pump_backend == "wireless",
+    )
     app.add_middleware(BodySizeLimitMiddleware)
     _register_exception_handlers(app)
     app.include_router(router)
+    app.include_router(emg_router)
     _register_websocket(app)
     return app
 

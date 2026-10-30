@@ -309,6 +309,10 @@ class GatewayRuntime:
             avg_factor=self._sensor_avg_factor if ble else None,
         )
 
+    def sensor_running(self) -> bool:
+        """근육 연속 측정은 같은 ADS1115 를 쓰므로 저항 측정 중엔 켜지 않는다(emg_routes)."""
+        return self._sensor_state == SensorState.RUNNING
+
     def list_datasets(self) -> list[dict[str, Any]]:
         """CSV 재생용 dataset 목록. 경로·파일명은 노출하지 않는다(화면 드롭다운용)."""
         manifest_path = self._config.datasets_dir / "manifest.json"
