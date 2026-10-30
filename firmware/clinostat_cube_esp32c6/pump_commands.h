@@ -24,7 +24,7 @@
  *   broker:<ip>[:<port>] / brokerhost:<name>   브로커 주소. 재flash 없이 바꾼다.
  *   resetpos · wiring · status · help
  *   sensor · sensor:on|off   저항센서(ADS1115) 상태·켜고 끄기 (2026-10-22, NVS 저장)
- *   emg · emg:cap:<ms> · emg:pga:<mV>   근육 응답 전압 캡처(AIN2−AIN3, 2026-10-30, PGA NVS 저장)
+ *   emg · emg:cap:<ms> · emg:pga:<mV>   근육 응답 전압 캡처(전용 칩 0x49 AIN0−AIN1, 2026-10-30, PGA NVS 저장)
  *   emg:stream:on|off   근육 연속 측정. on 은 keepalive 겸용(20 s 없으면 자동 종료)
  *
  * 2026-10-15 — 펌프 2대. 모터 명령은 **대상 펌프 접두어** `p1:` / `p2:` 를 받는다.
@@ -276,7 +276,7 @@ inline void handleCommandFor(int idx, const String& raw) {
   else if (c == "emg")       { gReply(gMuscle.statusLine()); }
   else if (c.startsWith("emg:cap:")) {
     String err = gMuscle.start(cmdArg(c, 8).toInt());
-    gReply(err.length() ? err : "ok emg 캡처 시작 " + cmdArg(c, 8) + " ms (저항센서 일시정지)");
+    gReply(err.length() ? err : "ok emg 캡처 시작 " + cmdArg(c, 8) + " ms");
   }
   else if (c == "emg:stream:on")  { gReply(gMuscle.streamOn()); }
   else if (c == "emg:stream:off") { gReply(gMuscle.streamOff("명령")); }
@@ -295,7 +295,7 @@ inline void handleCommandFor(int idx, const String& raw) {
     gReply("     [p1:|p2:]pin:step|dir|en:<gpio> pinD:step|dir|en:<D> enpol:low|high pulse:<us> ramp:<hz>[,<ms>]");
     gReply("     pincheck:<gpio> broker:<ip>[:<port>] brokerhost:<name> wiring status help");
     gReply("     sensor sensor:on|off  (저항센서 ADS1115, D4=SDA D5=SCL, s25007/board1/sensor)");
-    gReply("     emg emg:cap:<ms> emg:pga:<mV>  (근육 응답 AIN2-AIN3, 10~2000 ms, s25007/board1/emg)");
+    gReply("     emg emg:cap:<ms> emg:pga:<mV>  (근육 응답 0x49 AIN0-AIN1, 10~2000 ms, s25007/board1/emg)");
     gReply("     emg:stream:on|off  (근육 연속 측정, …/emg/stream, on 을 20 s 안에 다시 보내야 유지)");
     gReply("     접두어 없음 = 펌프 1. MQTT 는 토픽이 대상을 정한다 (…/board1/p2/cmd = 펌프 2).");
   }
