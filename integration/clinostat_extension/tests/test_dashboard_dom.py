@@ -661,3 +661,9 @@ def test_experiment_name_is_restamped_before_the_measurement_starts(work):
 
 def test_experiment_name_puts_the_caret_after_the_prefix(work):
     assert "field.setSelectionRange(end, end)" in work
+
+
+def test_resistance_rref_defaults_to_the_board_reference_resistor(work):
+    """큐브 보드 분압 Rref 는 100 kΩ(2026-10-31 실물 확인). 측정 시작이 이 값을 장치에 보낸다."""
+    m = re.search(r'<input id="resistanceRref"[^>]*\bvalue="(\d+)"', work)
+    assert m and m.group(1) == "100000"
