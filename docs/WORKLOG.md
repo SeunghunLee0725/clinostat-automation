@@ -6,6 +6,32 @@
 
 ---
 
+## 2026-11-03 — 음성 비서를 구독제 Claude 로 교체, 대화로 실험 실행까지 (파이 배포 완료)
+
+### 지금 상태 (이 줄만 읽어도 됨)
+
+| 항목 | 상태 |
+|---|---|
+| LLM | **구독제 Claude** — Claude Code CLI `claude -p`(구조화 출력 `{reply, action}`, 도구 전부 끔). API 키 없음. 파이 `~/clinostat/.env` 의 `CLINOSTAT_CLAUDE_SSH=shlee@100.85.45.76` 로 **Pi 5(kims-pi-2) 의 claude 를 ssh 로 호출**. gemma llama-server 는 Claude 가 없을 때의 대체재 |
+| 새 파일 | `work/assistant_claude.py`(CLI 클라이언트·세션·조작 검증), `work/assistant_tools.py`(실험 상태·runs 요약). `deploy_to_pi.sh` 에 둘 다 추가, sudo 없이 재시작하는 fallback 추가 |
+| 서버 | `POST /api/assistant/chat {session_id, text}` → `{reply, action, source:"claude", model, latency_ms}`. 시스템 프롬프트에 장치 상태·전략 목록·실험 러너 상태·최근 기록 3건을 넣어 한 번 묻는다. `/api/assistant/status` 에 `claude` 항목(logged_in, ssh, error) |
+| 조작 | Claude 가 돌려준 action 은 `build_action` 검증 뒤 Action 으로 브라우저에 **돌려주기만**. 시작류(start_experiment·set_strategy·start_clinostat·run_pump·start_sensor)는 [실행] 확인, 정지류는 즉시. 글(reply)은 절대 실행되지 않음 |
+| 콘솔 | `/console` 이 Claude 로그인 상태면 chat 경로, 아니면 기존 규칙 파서. 새 실행기 experiment_run(`/api/experiment/run`)·experiment_stop·strategy_set. 실행 결과를 `[실행 결과] …` 로 비서에게 되돌려 대화가 이어짐. "실험 자동 보고" 체크박스: 실험 중 5분마다·종료 시 Claude 가 요약해 TTS |
+| Pi 5 | `kims-pi-2`(RPi 5, 16 GB, sudo 없음): node 22(nvm)·Claude Code(`~/.local/bin/claude`) 설치(nvm 은 비대화형 셸에서 PATH 에 없음 — claude 네이티브 바이너리는 node 불필요). `claude auth status` → **이미 claude.ai 구독 로그인됨**. 직접 호출 실측 3.4 s(API 1.6 s). clinostat-pi 의 공개키(`~/.ssh/id_ed25519.pub`, 주석 clinostat-pi-assistant)를 Pi 5 `~/.ssh/authorized_keys` 에 넣어야 ssh 경유가 된다 |
+| 테스트 | 1017 passed(+ test_ble_sensor 2건 기존 실패). 새 테스트 `test_assistant_claude.py`·`test_assistant_tools.py`(합계 60), `test_console_dom.py`·`test_assistant.py` 확장 |
+| 파이 배포 | server.py·assistant_claude.py·assistant_tools.py·console.html (백업 `~/spacebio-backups/20261103_113022_claude_assistant`). index.html 은 10-30 미배포분이 있어 **이번에 보내지 않음** |
+
+### 헤드리스 호출 형태 (Mac 실측)
+`claude -p <prompt> --output-format json --json-schema <schema> --system-prompt <sys> --model sonnet --tools "" --max-turns 1 --no-session-persistence --strict-mcp-config --setting-sources "" --exclude-dynamic-system-prompt-sections`
+→ `structured_output` 에 `{reply, action}`. 기본 플래그면 캐시 생성 40k 토큰·9.5 s, 위 플래그면 1.2k 토큰·4.8 s(Mac). 세션 기억은 서버가 들고(세션당 20발화) 프롬프트에 다시 넣는다.
+
+### 남은 일
+- **(유일한 남은 단계)** clinostat-pi 공개키를 Pi 5 authorized_keys 에 등록(자동화 도구가 거부해 사람이 한다) → `curl -s http://100.77.1.42:8000/api/assistant/status` 의 `claude.logged_in` 이 true 가 되면 끝
+- Pi 5 claude 프로세스 기동 시간 실측(Mac 4.8 s 기준, Pi 5 는 더 걸릴 수 있음) — 느리면 `CLINOSTAT_CLAUDE_MODEL=haiku`
+- 서버측 STT(Whisper)는 보류 — 브라우저 Web Speech(ko-KR) 유지
+
+---
+
 ## 2026-10-30 저녁 — 근육 전용 ADS1115 추가(0x49), 저항센서와 동시 측정 **완료**
 
 (월요일로 잡았던 작업을 칩이 있어 당일 진행.)
