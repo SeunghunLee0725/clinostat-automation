@@ -34,6 +34,8 @@ declare -a EXTENSION_PAIRS=(
   "clinostat_extension/work/server.py:$CLINOSTAT_ROOT/server.py"
   "clinostat_extension/work/spacebio_proxy.py:$CLINOSTAT_ROOT/spacebio_proxy.py"
   "clinostat_extension/work/assistant.py:$CLINOSTAT_ROOT/assistant.py"
+  "clinostat_extension/work/assistant_claude.py:$CLINOSTAT_ROOT/assistant_claude.py"
+  "clinostat_extension/work/assistant_tools.py:$CLINOSTAT_ROOT/assistant_tools.py"
   "clinostat_extension/work/static/index.html:$CLINOSTAT_ROOT/static/index.html"
   "clinostat_extension/work/static/console.html:$CLINOSTAT_ROOT/static/console.html"
 )
@@ -102,8 +104,13 @@ done
 # ─────────────────────────── 재시작 · 검증 ───────────────────────────
 
 say "서비스 재시작"
-run_remote "sudo systemctl restart spacebio-gateway.service clinostat.service"
-sleep 6
+# sudo 가 비밀번호를 요구하는 기계에서는 Restart=always 를 믿고 MainPID 에 TERM 을 보낸다(WORKLOG 2026-10-16).
+restart_services() {
+  if run_remote "sudo -n systemctl restart spacebio-gateway.service clinostat.service" 2>/dev/null; then return 0; fi
+  run_remote 'for u in spacebio-gateway clinostat; do pid=$(systemctl show -p MainPID --value "$u"); [ -n "$pid" ] && [ "$pid" != 0 ] && kill -TERM "$pid"; done'
+}
+restart_services
+sleep 8
 
 say "검증"
 FAILED=0

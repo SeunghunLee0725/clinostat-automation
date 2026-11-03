@@ -9,6 +9,7 @@ import asyncio
 import glob
 import json
 import math
+import re
 import anyio
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,9 @@ import spacebio_proxy
 from spacebio_proxy import ProxyGatewayError, ProxyPathError
 # 통합 관제 콘솔(/console)의 음성 비서 — 규칙 파서 + Tailscale 온보드 LLM (2026-10-17)
 import assistant
+# 구독제 Claude(Claude Code CLI) 대화 비서 — 실험 실행까지 대화로. 글은 실행되지 않는다 (2026-11-03)
+import assistant_claude
+import assistant_tools
 
 
 class CloseableStreamingResponse(StreamingResponse):
@@ -120,6 +124,9 @@ async def lifespan(app: FastAPI):
     )
     app.state.spacebio = spacebio_proxy.SpaceBioProxy(app.state.spacebio_client)
     app.state.assistant_llm = assistant.LlmClient()
+    # .env(파이 로컬, 커밋 금지)의 CLINOSTAT_CLAUDE_SSH/BIN/MODEL·CLAUDE_CODE_OAUTH_TOKEN. 값은 로그에 남기지 않는다.
+    assistant_claude.load_env_file(Path(__file__).parent / ".env")
+    app.state.assistant_claude = assistant_claude.ClaudeAssistant.from_env()
     yield
     # 종료 시 정리
     # (하드웨어 정지가 항상 먼저다. SpaceBio 클라이언트는 그 뒤에 닫는다.)
@@ -1358,7 +1365,10 @@ async def _assistant_summary(request: Request) -> dict:
 
 @app.get("/api/assistant/status")
 async def assistant_status(request: Request):
-    return {"hosts": await request.app.state.assistant_llm.probe(), "stt": "browser"}
+    claude = request.app.state.assistant_claude
+    claude_state = (await claude.client.probe() if claude else
+                    {"configured": False, "logged_in": False, "error": "claude CLI 미설정 (.env 의 CLINOSTAT_CLAUDE_SSH 또는 _BIN)"})
+    return {"hosts": await request.app.state.assistant_llm.probe(), "stt": "browser", "claude": claude_state}
 
 
 @app.post("/api/assistant/command")
@@ -1391,6 +1401,48 @@ async def assistant_command(cmd: AssistantCommand, request: Request):
 @app.post("/api/assistant/summary")
 async def assistant_summary(request: Request):
     return await _assistant_summary(request)
+
+
+# ─── 구독제 Claude 대화 (/api/assistant/chat) ───
+# 서버는 상태·전략·실험·기록을 시스템 프롬프트에 넣어 한 번 묻고, 받은 action 은 검증된 Action 으로
+# **돌려주기만** 한다. 실행은 브라우저가 확인 뒤 기존 /api/* 로 한다 (assistant_claude 모듈 설명 참조).
+
+class AssistantChat(BaseModel):
+    session_id: str = "default"
+    text: str
+
+
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _assistant_system_prompt(ctx: dict) -> str:
+    return assistant_claude.system_prompt(
+        ctx,
+        strategies=assistant_tools.strategies_brief(STRATEGY_REGISTRY, STRATEGY_PRESETS, control.state.strategy_name),
+        experiment=assistant_tools.experiment_brief(experiment_runner.status()),
+        recent_runs=assistant_tools.list_recent_runs(RUNS_DIR, limit=3),
+    )
+
+
+@app.post("/api/assistant/chat")
+async def assistant_chat(cmd: AssistantChat, request: Request):
+    claude = request.app.state.assistant_claude
+    if claude is None:
+        return JSONResponse(status_code=503, content={"error": {
+            "code": "claude_not_configured", "message": "claude CLI 가 설정되지 않았습니다 (.env)"}})
+    text = (cmd.text or "").strip()[:2000]
+    session_id = cmd.session_id if _SESSION_ID_RE.match(cmd.session_id or "") else "default"
+    if not text:
+        return {"text": "", "reply": "말씀이 비어 있습니다.", "action": None, "source": "none"}
+    ctx = await _assistant_context(request)
+    try:
+        result = await claude.chat(session_id, text, _assistant_system_prompt(ctx))
+    except assistant_claude.ClaudeUnavailable as exc:
+        return {"text": text, "action": None, "source": "none", "error": str(exc)[:300],
+                "reply": "Claude 를 부르지 못했습니다. " + assistant.template_summary(ctx)}
+    return {"text": text, "reply": result.reply, "source": "claude", "model": result.model,
+            "latency_ms": result.latency_ms, "cost_usd": result.cost_usd,
+            "action": assistant.action_to_dict(result.action) if result.action else None}
 
 
 if __name__ == "__main__":

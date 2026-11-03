@@ -210,15 +210,16 @@ section.cols4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14p
           </button>
           <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px">
             <svg class="bars" id="csVoiceBars" viewBox="0 0 400 48" preserveAspectRatio="none" aria-hidden="true"></svg>
-            <div style="font-size:13px;color:var(--text2)" id="csMicHint">마이크를 누르고 말하세요. 예: "펌프 2 400헤르츠 5초", "클리노스텟 정지", "지금 상태 알려 줘"</div>
+            <div style="font-size:13px;color:var(--text2)" id="csMicHint">마이크를 누르고 말하세요. 예: "fibonacci 조건으로 10분 실험 시작", "펌프 2 400헤르츠 5초", "지금 상태 알려 줘"</div>
             <div class="row">
               <button class="btn" type="button" id="csSummaryBtn">상황 요약 듣기</button>
               <label class="chk" for="csTtsToggle" style="min-height:44px"><input type="checkbox" id="csTtsToggle" checked>음성으로 읽기</label>
+              <label class="chk" for="csAutoReport" style="min-height:44px"><input type="checkbox" id="csAutoReport" checked>실험 자동 보고 (5분마다·종료 시)</label>
             </div>
           </div>
         </div>
         <div class="chat" id="csTranscript">
-          <div class="bubble sys">명령은 서버 규칙으로 해석되고, 장치를 움직이는 명령은 [실행]을 눌러야 보냅니다. 그 밖의 질문은 온보드 LLM 이 답합니다.</div>
+          <div class="bubble sys">말은 구독제 Claude 가 해석합니다. 실험·회전·펌프·측정 <b>시작</b>은 [실행]을 눌러야 보내고, <b>정지</b>는 바로 보냅니다. Claude 의 글은 실행되지 않습니다. Claude 가 없으면 서버 규칙 파서로 돌아갑니다.</div>
         </div>
         <div class="confirm" id="csConfirmBar">
           <button class="btn primary" type="button" id="csConfirmRun" style="height:40px">실행</button>
@@ -622,6 +623,65 @@ async function stopAll() {
   log('전체 정지 — 클리노스텟 ' + (clinostatOk ? 'OK' : '실패') + ' / 펌프 ' + (pumpOk ? 'OK' : '실패'));
 }
 
+// ─────────────────────────── 실험 실행 · 결과 보고 (Claude 대화 비서, 2026-11-03) ───────────────────────────
+let assistantMode = 'rule';          // 'claude' | 'rule' — /api/assistant/status 가 정한다
+const ASSISTANT_SESSION_ID = (() => {
+  try {
+    let id = sessionStorage.getItem('csAssistantSession');
+    if (!id) { id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 's' + Date.now(); sessionStorage.setItem('csAssistantSession', id); }
+    return id.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || 'default';
+  } catch (err) { return 'default'; }
+})();
+
+async function runExperiment(p) {
+  const r = await api('POST', '/api/experiment/run', { strategy: p.strategy, params: p.params || {}, duration_s: p.duration_s });
+  if (!r.ok) throw new Error(r.error || '실험 시작 실패');
+  const runId = (r.status && r.status.run_id) || '';
+  log('실험 시작 — ' + p.strategy + ' ' + p.duration_s + ' s' + (runId ? ' (' + runId + ')' : ''));
+  lastAutoReport = Date.now();
+}
+
+async function experimentStop() {
+  await api('POST', '/api/experiment/stop');
+  log('실험 중단 요청');
+}
+
+async function setStrategy(p) {
+  const r = await api('POST', '/api/strategy', { name: p.name, params: p.params || {} });
+  if (!r.ok) throw new Error(r.error || '조건 적용 실패');
+  log('운전 조건 설정 — ' + p.name);
+  loadStrategies().catch(() => {});
+}
+
+async function reportResult(action, ok, detail) {
+  // 실행 결과를 비서에게 되돌려 대화가 이어지게 한다. 규칙 모드에서는 비서가 기억이 없으니 생략.
+  if (assistantMode !== 'claude') return;
+  const text = '[실행 결과] ' + action.summary + ' → ' + (ok ? '성공' : '실패: ' + (detail || '원인 미상'));
+  await sendCommand(text, { quiet: true });
+}
+
+let experimentRunning = false;
+let lastAutoReport = 0;
+const AUTO_REPORT_MS = 5 * 60 * 1000;
+
+function autoReportDue() {
+  return $('csAutoReport').checked && assistantMode === 'claude' && (Date.now() - lastAutoReport) >= AUTO_REPORT_MS;
+}
+
+async function pollExperiment() {
+  let st;
+  try { st = await api('GET', '/api/experiment/status'); } catch (err) { return; }
+  const running = !!st.running;
+  if (running && !experimentRunning) lastAutoReport = Date.now();
+  if (running && autoReportDue()) {
+    lastAutoReport = Date.now();
+    await sendCommand('[자동 보고] 실험 진행 상황(경과·잔여 시간, 지표)을 한두 문장으로 보고해 줘', { quiet: true });
+  } else if (!running && experimentRunning && $('csAutoReport').checked && assistantMode === 'claude') {
+    await sendCommand('[자동 보고] 방금 끝난 실험 결과를 판정과 함께 두 문장으로 보고해 줘', { quiet: true });
+  }
+  experimentRunning = running;
+}
+
 // ─────────────────────────── 음성 비서 ───────────────────────────
 let recognition = null;
 let listening = false;
@@ -680,7 +740,7 @@ function setListening(on) {
   $('csMicBtn').classList.toggle('on', on);
   setPill($('csMicState'), on ? 'ok' : 'mute', on ? '듣는 중' : '대기 중');
   $('csOvVoice').textContent = on ? '듣는 중' : '대기 중';
-  if (!on) $('csMicHint').textContent = '마이크를 누르고 말하세요. 예: "펌프 2 400헤르츠 5초", "클리노스텟 정지", "지금 상태 알려 줘"';
+  if (!on) $('csMicHint').textContent = '마이크를 누르고 말하세요. 예: "fibonacci 조건으로 10분 실험 시작", "펌프 2 400헤르츠 5초", "지금 상태 알려 줘"';
   animateBars(on);
 }
 
@@ -713,11 +773,14 @@ function speak(text) {
   window.speechSynthesis.speak(utter);
 }
 
-async function sendCommand(text) {
-  bubble('me', text);
-  const thinking = bubble('sys', '해석 중…');
+async function sendCommand(text, opts) {
+  const quiet = !!(opts && opts.quiet);
+  bubble(quiet ? 'sys' : 'me', text);
+  const thinking = bubble('sys', assistantMode === 'claude' ? 'Claude 생각 중…' : '해석 중…');
   try {
-    const data = await api('POST', '/api/assistant/command', { text });
+    const data = assistantMode === 'claude'
+      ? await api('POST', '/api/assistant/chat', { session_id: ASSISTANT_SESSION_ID, text })
+      : await api('POST', '/api/assistant/command', { text });
     thinking.remove();
     await handleAssistantReply(data);
   } catch (err) {
@@ -727,8 +790,10 @@ async function sendCommand(text) {
 
 async function handleAssistantReply(data) {
   const action = data.action;
-  const source = data.source === 'llm' ? 'LLM ' + (data.llm_host || '') + (data.latency_ms ? ' · ' + (data.latency_ms / 1000).toFixed(1) + ' s' : '')
-    : (data.source === 'rule' ? '규칙' : '응답 없음');
+  const latency = data.latency_ms ? ' · ' + (data.latency_ms / 1000).toFixed(1) + ' s' : '';
+  const source = data.source === 'claude' ? 'Claude ' + (data.model || '') + latency
+    : data.source === 'llm' ? 'LLM ' + (data.llm_host || '') + latency
+    : (data.source === 'rule' ? '규칙' : '응답 없음' + (data.error ? ' — ' + data.error : ''));
   bubble('ai', data.reply);
   bubble('sys', source);
   speak(data.reply);
@@ -751,22 +816,33 @@ async function executeAction(action) {
       case 'pump_run': await runPumpHz(p.pump_id, p.hz, p.sec); break;
       case 'pump_stop': await pumpStop(p.pump_id); break;
       case 'clinostat_stop': await clinostatStop(); break;
-      case 'clinostat_start': await clinostatStart(); break;
+      case 'clinostat_start': {
+        const started = await clinostatStart();
+        if (started === false) throw new Error('안전 확인 체크박스 또는 조건 적용 실패');
+        break;
+      }
       case 'stop_all': await stopAll(); break;
       case 'estop': await pumpEmergencyStop(); break;
       case 'sensor_start': await sensorStart(); break;
       case 'sensor_stop': await sensorStop(); break;
+      case 'experiment_run': await runExperiment(p); break;
+      case 'experiment_stop': await experimentStop(); break;
+      case 'strategy_set': await setStrategy(p); break;
       case 'status': break;
       default: log('알 수 없는 명령 종류: ' + action.kind);
     }
     bubble('sys', '실행함 — ' + action.summary);
+    await reportResult(action, true, '');
   } catch (err) {
-    bubble('sys', '실행 실패 — ' + ($('csGatewayError').textContent || err.message));
-    speak('실행하지 못했습니다. ' + $('csGatewayError').textContent);
+    const detail = $('csGatewayError').textContent || err.message;
+    bubble('sys', '실행 실패 — ' + detail);
+    speak('실행하지 못했습니다. ' + detail);
+    await reportResult(action, false, detail);
   }
 }
 
 async function requestSummary() {
+  if (assistantMode === 'claude') { await sendCommand('지금 상황을 한두 문장으로 보고해 줘'); return; }
   const thinking = bubble('sys', '상황 요약 생성 중…');
   try {
     const data = await api('POST', '/api/assistant/summary');
@@ -780,11 +856,23 @@ async function requestSummary() {
 async function probeLlm() {
   try {
     const data = await api('GET', '/api/assistant/status');
+    const claude = data.claude || {};
+    const tts = ' · TTS ' + ($('csTtsToggle').checked ? '켜짐' : '꺼짐');
+    if (claude.configured && claude.logged_in) {
+      assistantMode = 'claude';
+      const where = claude.ssh ? ' @ ' + String(claude.ssh).split('@').pop() : '';
+      setPill($('csChipLlm'), 'ok', 'Claude ' + (claude.model || '') + where);
+      setPill($('csOvVoiceState'), 'ok', 'Claude ' + (claude.model || '') + tts);
+      return;
+    }
+    assistantMode = 'rule';
     const up = (data.hosts || []).find((h) => h.reachable);
-    const text = up ? 'LLM ' + up.name + ' · ' + up.model : 'LLM 없음 — 규칙 요약';
-    setPill($('csChipLlm'), up ? 'ok' : 'warn', text);
-    setPill($('csOvVoiceState'), up ? 'ok' : 'warn', up ? up.name + ' · TTS ' + ($('csTtsToggle').checked ? '켜짐' : '꺼짐') : '규칙 요약만');
+    const why = claude.configured ? ' (Claude: ' + (claude.error || '로그인 필요') + ')' : '';
+    const text = up ? 'LLM ' + up.name + ' · ' + up.model + why : 'LLM 없음 — 규칙 요약' + why;
+    setPill($('csChipLlm'), up ? 'warn' : 'bad', text);
+    setPill($('csOvVoiceState'), up ? 'warn' : 'bad', up ? up.name + tts : '규칙 요약만');
   } catch (err) {
+    assistantMode = 'rule';
     setPill($('csChipLlm'), 'bad', 'LLM 상태 불명');
   }
 }
@@ -825,6 +913,7 @@ async function init() {
   setInterval(tickClock, 1000);
   setInterval(watchStale, 1000);
   setInterval(probeLlm, 60000);
+  setInterval(pollExperiment, 10000);
   connectClinostatWs();
   connectSpacebioWs();
   loadStrategies().catch(() => log('운전 조건 목록을 불러오지 못했습니다'));

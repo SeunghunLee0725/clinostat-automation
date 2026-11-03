@@ -276,6 +276,7 @@ def test_server_exposes_console_page_and_assistant_routes():
     assert ("get", "/api/assistant/status") in routes
     assert ("post", "/api/assistant/command") in routes
     assert ("post", "/api/assistant/summary") in routes
+    assert ("post", "/api/assistant/chat") in routes
 
 
 def test_console_page_is_served_without_heuristic_cache():

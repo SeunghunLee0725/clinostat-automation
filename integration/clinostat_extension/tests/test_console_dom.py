@@ -156,6 +156,7 @@ def test_voice_actions_wait_for_confirmation_when_the_server_says_so(page):
 @pytest.mark.parametrize("kind", [
     "pump_run", "pump_stop", "clinostat_stop", "stop_all", "estop",
     "sensor_start", "sensor_stop", "clinostat_start", "status",
+    "experiment_run", "experiment_stop", "strategy_set",
 ])
 def test_every_rule_action_kind_has_an_executor(page, kind):
     assert f"'{kind}'" in _block(page, "async function executeAction(")
@@ -191,3 +192,39 @@ def test_llm_reply_is_never_executed(page):
     handle = _block(page, "async function handleAssistantReply(")
     assert "executeAction(reply" not in handle
     assert "executeAction(data.action" in handle or "executeAction(action" in handle
+
+
+# ─────────────────────────── Claude 대화 비서 (2026-11-03) ───────────────────────────
+
+def test_console_talks_to_claude_chat_with_a_session_id(page):
+    send = _block(page, "async function sendCommand(")
+    assert "/api/assistant/chat" in send
+    assert "session_id" in send
+    assert "/api/assistant/command" in page        # Claude 미설정 시 규칙 경로로 되돌아간다
+
+
+def test_experiment_run_executor_uses_the_experiment_endpoint(page):
+    run = _block(page, "async function runExperiment(")
+    assert "/api/experiment/run" in run
+    assert "duration_s" in run and "strategy" in run
+    stop = _block(page, "async function experimentStop(")
+    assert "/api/experiment/stop" in stop
+
+
+def test_action_results_are_reported_back_to_the_assistant(page):
+    execute = _block(page, "async function executeAction(")
+    assert "reportResult(" in execute
+    report = _block(page, "async function reportResult(")
+    assert "[실행 결과]" in report
+
+
+def test_auto_report_during_experiments_is_opt_in(page):
+    assert 'id="csAutoReport"' in page
+    poll = _block(page, "async function pollExperiment(")
+    assert "/api/experiment/status" in poll
+    assert "csAutoReport" in poll or "autoReportDue(" in poll
+
+
+def test_llm_chip_prefers_claude(page):
+    probe = _block(page, "async function probeLlm(")
+    assert "claude" in probe
