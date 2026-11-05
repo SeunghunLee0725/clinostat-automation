@@ -3131,41 +3131,46 @@ document.addEventListener('DOMContentLoaded', () => {
      둔 규칙(#2a2a4a 테두리, 버튼 글자색 등)만 골라 다시 쓴다. -->
 <style id="uiTheme">
 :root {
-  /* 검은 배경 · 흰 글자 (2026-10-29 3차). 강조는 흑백으로, 색은 상태(정지·실측·경고)에만 쓴다. */
-  --bg: #000000;
-  --surface: #0a0a0a;
-  --card: #0a0a0a;
-  --accent: #ef4444;
-  --green: #22c55e;
-  --blue: #ffffff;
-  --orange: #f59e0b;
-  --text: #ffffff;
-  --text-dim: #a3a3a3;
-  --radius: 8px;
-  --line: #262626;
-  --line-strong: #404040;
-  --fill-soft: #141414;
-  --field: #000000;
-  --primary: #ffffff;
-  --primary-hover: #d4d4d4;
-  --on-primary: #000000;
-  --danger-hover: #dc2626;
-  --danger-soft: rgba(239,68,68,.08);
-  --danger-line: rgba(239,68,68,.45);
-  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  /* B안 '연구실 노트' (2026-11-05, 2026-10-29 검은 테마를 대체). 종이 톤 바탕 · 연한 카드 · 먹색 글자 ·
+     청록 강조 · 세이지 보조. 빨강은 정지·위험에만. 참고: Figma 'Scientific Laboratory Data Recording
+     Dashboard', 'Clinical Dashboard'. 3안 비교 캔버스는 WORKLOG 2026-11-05. */
+  --bg: #F3F1EC;
+  --surface: #FFFDF9;
+  --card: #FFFDF9;
+  --accent: #B91C1C;
+  --green: #0F766E;
+  --blue: #0F766E;
+  --orange: #C2410C;
+  --text: #2A2A28;
+  --text-dim: #6B6760;
+  --radius: 10px;
+  --line: #E4DFD5;
+  --line-strong: #D8D2C6;
+  --fill-soft: #F3F1EC;
+  --field: #FFFDF9;
+  --primary: #0F766E;
+  --primary-hover: #115E59;
+  --on-primary: #FFFFFF;
+  --danger-hover: #991B1B;
+  --danger-soft: rgba(185,28,28,.07);
+  --danger-line: rgba(185,28,28,.4);
+  --sage: #8AB4A8;
+  --slate: #334155;
+  --card-2: #FFFDF9;   /* 기록 관리 '받기' 링크가 인라인 style 로 쓰는 변수(없으면 #1e2633 남색) */
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
-body { font-family: -apple-system, 'Pretendard', 'Apple SD Gothic Neo', 'Segoe UI', system-ui, sans-serif;
+body { font-family: 'Noto Sans KR', -apple-system, 'Pretendard', 'Apple SD Gothic Neo', 'Segoe UI', system-ui, sans-serif;
   font-size: 14px; -webkit-font-smoothing: antialiased; }
-header { background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 24px; }
+header { background: var(--bg); border-bottom: 2px solid var(--line); padding: 10px 24px; }
 header h1 { font-size: 1.05em; font-weight: 600; letter-spacing: -0.01em; }
 .status-bar { gap: 16px; color: var(--text-dim); align-items: center; }
 .status-dot { width: 8px; height: 8px; background: var(--line-strong); }
-/* RPM 값 색은 차트 선과 맞춘다 — 외측 흰색, 내측 회색. */
-.outer-color { color: #ffffff; } .inner-color { color: #a3a3a3; } .time-color { color: var(--text); }
+/* RPM 값 색은 차트 선과 맞춘다 — 외측 슬레이트, 내측 청록. */
+.outer-color { color: var(--slate); } .inner-color { color: var(--green); } .time-color { color: var(--text); }
 button:disabled { opacity: .35; }
 
 .card, .metric-card, .chart-card, .sensor-card, .metric-paper, .cam-card, .live-strip {
-  border: 1px solid var(--line); box-shadow: none; }
+  border: 1px solid var(--line); box-shadow: none; border-radius: 14px; }
 .card h3, .cam-card h3, .metric-paper h4, .manual-op-card > .manual-op-summary,
 .chart-footer .cf-metric .lbl, .live-strip .live-metric .lbl {
   text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--text); }
@@ -3180,15 +3185,18 @@ button:disabled { opacity: .35; }
 
 select, input[type="number"], input[type="text"] {
   background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text); }
-select:focus, input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(255,255,255,.15); }
+select:focus, input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(15,118,110,.18); }
 
 button { font-weight: 500; border: 1px solid var(--line-strong); background: transparent; color: var(--text);
   transition: background .15s, border-color .15s; }
-button:hover { opacity: 1; background: var(--fill-soft); border-color: #737373; }
+button:hover { opacity: 1; background: var(--fill-soft); border-color: #C9C2B4; }
 .btn-connect, .btn-start, .cam-toggle { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 .btn-connect:hover, .btn-start:hover { background: var(--primary-hover); }
 .btn-disconnect, .btn-refresh { background: transparent; color: var(--text); }
-.btn-test { background: transparent; color: var(--orange); border-color: rgba(245,158,11,.5); }
+.btn-test { background: transparent; color: var(--orange); border-color: rgba(194,65,12,.5); }
+/* 운전 조건의 Run 은 시험 버튼이 아니라 주 동작이다 — 청록 채움. */
+button.btn-test[onclick="applyOperationCondition(true)"] { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+button.btn-test[onclick="applyOperationCondition(true)"]:hover { background: var(--primary-hover); }
 .btn-stop, .cam-toggle.off { background: var(--accent); border-color: var(--accent); color: #ffffff; }
 .btn-stop:hover { background: var(--danger-hover); }
 
@@ -3212,8 +3220,14 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
 #spacebioPanel button.sb-primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 #spacebioPanel button.sb-primary:hover:not(:disabled) { background: var(--primary-hover); }
 #spacebioPanel button.sb-danger { background: var(--accent); border-color: var(--accent); color: #ffffff; width: 100%; padding: 9px; }
-#spacebioPanel .sb-badge { background: rgba(245,158,11,.15); color: #fbbf24; font-weight: 600; }
-#spacebioPanel .sb-badge.sb-live { background: rgba(34,197,94,.15); color: #4ade80; }
+#spacebioPanel .sb-badge { background: rgba(194,65,12,.12); color: #9A3412; font-weight: 600; }
+#spacebioPanel .sb-badge.sb-live { background: rgba(15,118,110,.12); color: #0F766E; }
+#spacebioPanel .sb-card, details.sb-fold > summary { border-radius: 14px; }
+.status-dot.on { background: var(--green); }
+.cam-wrap { background: #EFEAE0; color: var(--text-dim); }
+#spacebioArchive .sb-arch-download { background: var(--field); color: var(--text); border: 1px solid var(--line-strong); }
+#spacebioArchive .sb-arch-download:hover { background: var(--fill-soft); }
+::selection { background: rgba(15,118,110,.2); }
 #spacebioPanel .sb-sec { border-top-color: var(--line); }
 #spacebioPanel .sb-hint.warn { color: var(--orange); }
 #spacebioPanel .sb-danger-zone { background: var(--danger-soft); border-color: var(--danger-line); }
@@ -3377,52 +3391,18 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
-<style id="uiThemeWarmLab">
-/* ── B안 연구실 노트 (2026-11-05) ───────────────────────────────────────
-   따뜻한 종이 톤 바탕 · 연한 카드 · 먹색 글자 · 청록 강조 · 세이지 보조. 검은 배경 테마(uiTheme)의 변수를
-   덮어쓰고, 그 블록이 hex 로 박아 둔 몇 줄만 같은 선택자로 다시 쓴다. 차트 색은 아래 스크립트가 맡는다.
-   참고: Figma 'Scientific Laboratory Data Recording Dashboard', 'Clinical Dashboard'. */
-:root {
-  --bg: #F3F1EC; --surface: #FFFDF9; --card: #FFFDF9;
-  --accent: #B91C1C; --green: #0F766E; --blue: #0F766E; --orange: #C2410C;
-  --text: #2A2A28; --text-dim: #6B6760; --radius: 10px;
-  --line: #E4DFD5; --line-strong: #D8D2C6; --fill-soft: #F3F1EC; --field: #FFFDF9;
-  --primary: #0F766E; --primary-hover: #115E59; --on-primary: #FFFFFF;
-  --danger-hover: #991B1B; --danger-soft: rgba(185,28,28,.07); --danger-line: rgba(185,28,28,.4);
-  --sage: #8AB4A8; --slate: #334155;
-  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-}
-body { font-family: 'Noto Sans KR', -apple-system, 'Pretendard', 'Apple SD Gothic Neo', 'Segoe UI', system-ui, sans-serif; }
-header { background: var(--bg); border-bottom: 2px solid var(--line); }
-.outer-color { color: var(--slate); } .inner-color { color: var(--green); }
-select:focus, input:focus { box-shadow: 0 0 0 3px rgba(15,118,110,.18); }
-button:hover { border-color: #C9C2B4; }
-.btn-test { border-color: rgba(194,65,12,.5); }
-.card, .metric-card, .chart-card, .sensor-card, .metric-paper, .cam-card, .live-strip,
-#spacebioPanel .sb-card, details.sb-fold > summary { border-radius: 14px; }
-.card h3, .cam-card h3, .metric-paper h4, #spacebioPanel .sb-card h3 { color: var(--text); }
-#spacebioPanel .sb-badge { background: rgba(194,65,12,.12); color: #9A3412; }
-#spacebioPanel .sb-badge.sb-live { background: rgba(15,118,110,.12); color: #0F766E; }
-#spacebioPanel #spacebioEvents, #spacebioPanel .sb-readouts, .func-desc, .I5-gauge .col, .summary-row .pair { background: var(--fill-soft); }
-.status-dot { background: var(--line-strong); } .status-dot.on { background: var(--green); }
-.btn-stop, .cam-toggle.off, #spacebioPanel button.sb-danger { color: #FFFFFF; }
-::selection { background: rgba(15,118,110,.2); }
-/* 남아 있던 어두운 조각: 카메라 틀(꺼짐 상태)과 기록 관리의 '받기' 링크 버튼 */
-.cam-wrap { background: #EFEAE0; color: var(--text-dim); }
-#spacebioArchive .sb-arch-download { background: var(--field); color: var(--text); border: 1px solid var(--line-strong); }
-#spacebioArchive .sb-arch-download:hover { background: var(--fill-soft); }
-</style>
 <script>
 // 차트 색은 baseline 줄(어두운 배경용)에 박혀 있다 — 줄을 고치지 않고 그려진 뒤에 바꾼다.
 // 실패해도 화면 기능은 그대로여야 하므로 차트마다 따로 감싼다.
-// 주 계열은 흰색, 함께 그려지는 두 번째 계열은 회색, 기준선은 짙은 회색 — 흑백으로도 구분된다.
-const UI_SERIES_COLORS = { '#4cc9f0': '#ffffff', '#0cca4a': '#a3a3a3', '#f8961e': '#a3a3a3', '#888': '#525252' };
-const UI_SPHERE_SCALE = [[0, '#404040'], [1, '#ffffff']];
-// 막대 차트(밴드 D)는 선이 아니라 채움 색을 쓴다.
-const UI_FILL_COLORS = { 'rgba(76, 201, 240, 0.7)': 'rgba(255, 255, 255, 0.85)',
-                         'rgba(248, 150, 30, 0.7)': 'rgba(115, 115, 115, 0.85)' };
+// B안 연구실 노트 (2026-11-05): 주 계열 슬레이트, 둘째 계열 청록, 보조 세이지, 기준선 모래색.
+const UI_WARM_SERIES = { '#4cc9f0': '#334155', '#0cca4a': '#0F766E', '#f8961e': '#8AB4A8', '#888': '#B8B1A3',
+                         '#ffffff': '#0F766E', '#525252': '#B8B1A3' };
+const UI_WARM_FILLS = { 'rgba(76, 201, 240, 0.7)': 'rgba(51, 65, 85, 0.85)',
+                        'rgba(248, 150, 30, 0.7)': 'rgba(138, 180, 168, 0.9)' };
+const UI_WARM_SPHERE_SCALE = [[0, '#D8D2C6'], [1, '#0F766E']];
+const UI_WARM_PAPER = '#FFFDF9';
 function uiApplyChartTheme() {
-  const grid = '#262626', tick = '#a3a3a3', label = '#e5e5e5';
+  const grid = '#EFEAE0', tick = '#6B6760', label = '#2A2A28';
   if (window.Chart && Chart.getChart) {
     document.querySelectorAll('canvas').forEach((cv) => {
       try {
@@ -3436,9 +3416,9 @@ function uiApplyChartTheme() {
         const legend = chart.options.plugins && chart.options.plugins.legend;
         if (legend && legend.labels) legend.labels.color = label;
         chart.data.datasets.forEach((d) => {
-          const c = UI_SERIES_COLORS[String(d.borderColor).toLowerCase()];
+          const c = UI_WARM_SERIES[String(d.borderColor).toLowerCase()];
           if (c) d.borderColor = c;
-          const fill = UI_FILL_COLORS[String(d.backgroundColor)];
+          const fill = UI_WARM_FILLS[String(d.backgroundColor)];
           if (fill) d.backgroundColor = fill;
         });
         chart.update('none');
@@ -3446,32 +3426,27 @@ function uiApplyChartTheme() {
     });
   }
   try {
-    // refreshSphere() 가 같은 sphereLayout 객체로 Plotly.react 를 부르므로 객체 자체를
-    // 고쳐 둬야 다음 갱신 때 어두운 색으로 돌아가지 않는다.
     if (typeof sphereLayout !== 'undefined' && window.Plotly) {
-      const axis = { color: tick, gridcolor: grid };
-      Object.assign(sphereLayout, { paper_bgcolor: '#000000', plot_bgcolor: '#000000' });
-      Object.assign(sphereLayout.scene, { bgcolor: '#000000' });
+      const axis = { color: tick, gridcolor: '#E4DFD5', zerolinecolor: '#D8D2C6' };
+      Object.assign(sphereLayout, { paper_bgcolor: UI_WARM_PAPER, plot_bgcolor: UI_WARM_PAPER });
+      Object.assign(sphereLayout.scene, { bgcolor: UI_WARM_PAPER });
       ['xaxis', 'yaxis', 'zaxis'].forEach((k) => Object.assign(sphereLayout.scene[k], axis));
       Plotly.relayout('sphereDiv', sphereLayout);
-      // 점 색은 trace 에 있고, refreshSphere() 가 2초마다 Viridis(시간 순서) 로 새로 그린다.
-      // 시간 정보는 살리고 흑백에 맞춰 회색→흰색(최근일수록 흰색) 단계로 바꾼다.
-      // 이미 바뀐 그림은 건드리지 않아 afterplot → restyle 이 되풀이되지 않는다.
       const sphereDiv = document.getElementById('sphereDiv');
-      const toGrey = () => {
+      const toWarm = () => {
         const tr = sphereDiv.data && sphereDiv.data[0];
         if (!tr || !tr.marker) return;
-        if (Array.isArray(tr.marker.color) && tr.marker.colorscale !== UI_SPHERE_SCALE) {
-          Plotly.restyle(sphereDiv, { 'marker.colorscale': [UI_SPHERE_SCALE] });
-        } else if (typeof tr.marker.color === 'string' && tr.marker.color !== '#ffffff') {
-          Plotly.restyle(sphereDiv, { 'marker.color': '#ffffff' });
+        if (Array.isArray(tr.marker.color) && tr.marker.colorscale !== UI_WARM_SPHERE_SCALE) {
+          Plotly.restyle(sphereDiv, { 'marker.colorscale': [UI_WARM_SPHERE_SCALE] });
+        } else if (typeof tr.marker.color === 'string' && tr.marker.color !== '#334155') {
+          Plotly.restyle(sphereDiv, { 'marker.color': '#334155' });
         }
       };
-      if (!sphereDiv.dataset.uiGrey) {
-        sphereDiv.dataset.uiGrey = '1';
-        sphereDiv.on('plotly_afterplot', toGrey);
+      if (!sphereDiv.dataset.uiWarm) {
+        sphereDiv.dataset.uiWarm = '1';
+        sphereDiv.on('plotly_afterplot', toWarm);
       }
-      toGrey();
+      toWarm();
     }
   } catch (e) { /* 무시 */ }
 }
@@ -3793,65 +3768,6 @@ function uiWatchImuConnection() {
   uiSyncImuRow();
 }
 uiWatchImuConnection();
-</script>
-<script>
-// B안 연구실 노트 차트 색 (2026-11-05). 위의 흑백 치환 함수와 같은 이름으로 다시 선언해 DOMContentLoaded 때
-// 이 판이 불린다(함수 선언은 나중 스크립트가 이긴다). 주 계열 슬레이트, 둘째 계열 청록, 보조 세이지, 기준선 모래색.
-const UI_WARM_SERIES = { '#4cc9f0': '#334155', '#0cca4a': '#0F766E', '#f8961e': '#8AB4A8', '#888': '#B8B1A3',
-                         '#ffffff': '#0F766E', '#525252': '#B8B1A3' };
-const UI_WARM_FILLS = { 'rgba(76, 201, 240, 0.7)': 'rgba(51, 65, 85, 0.85)',
-                        'rgba(248, 150, 30, 0.7)': 'rgba(138, 180, 168, 0.9)' };
-const UI_WARM_SPHERE_SCALE = [[0, '#D8D2C6'], [1, '#0F766E']];
-const UI_WARM_PAPER = '#FFFDF9';
-function uiApplyChartTheme() {
-  const grid = '#EFEAE0', tick = '#6B6760', label = '#2A2A28';
-  if (window.Chart && Chart.getChart) {
-    document.querySelectorAll('canvas').forEach((cv) => {
-      try {
-        const chart = Chart.getChart(cv);
-        if (!chart) return;
-        Object.values(chart.options.scales || {}).forEach((s) => {
-          if (s.grid) s.grid.color = grid;
-          if (s.ticks) s.ticks.color = tick;
-          if (s.title) s.title.color = label;
-        });
-        const legend = chart.options.plugins && chart.options.plugins.legend;
-        if (legend && legend.labels) legend.labels.color = label;
-        chart.data.datasets.forEach((d) => {
-          const c = UI_WARM_SERIES[String(d.borderColor).toLowerCase()];
-          if (c) d.borderColor = c;
-          const fill = UI_WARM_FILLS[String(d.backgroundColor)];
-          if (fill) d.backgroundColor = fill;
-        });
-        chart.update('none');
-      } catch (e) { /* 테마 실패는 무시 — 기본 색으로 남는다 */ }
-    });
-  }
-  try {
-    if (typeof sphereLayout !== 'undefined' && window.Plotly) {
-      const axis = { color: tick, gridcolor: '#E4DFD5', zerolinecolor: '#D8D2C6' };
-      Object.assign(sphereLayout, { paper_bgcolor: UI_WARM_PAPER, plot_bgcolor: UI_WARM_PAPER });
-      Object.assign(sphereLayout.scene, { bgcolor: UI_WARM_PAPER });
-      ['xaxis', 'yaxis', 'zaxis'].forEach((k) => Object.assign(sphereLayout.scene[k], axis));
-      Plotly.relayout('sphereDiv', sphereLayout);
-      const sphereDiv = document.getElementById('sphereDiv');
-      const toWarm = () => {
-        const tr = sphereDiv.data && sphereDiv.data[0];
-        if (!tr || !tr.marker) return;
-        if (Array.isArray(tr.marker.color) && tr.marker.colorscale !== UI_WARM_SPHERE_SCALE) {
-          Plotly.restyle(sphereDiv, { 'marker.colorscale': [UI_WARM_SPHERE_SCALE] });
-        } else if (typeof tr.marker.color === 'string' && tr.marker.color !== '#334155') {
-          Plotly.restyle(sphereDiv, { 'marker.color': '#334155' });
-        }
-      };
-      if (!sphereDiv.dataset.uiWarm) {
-        sphereDiv.dataset.uiWarm = '1';
-        sphereDiv.on('plotly_afterplot', toWarm);
-      }
-      toWarm();
-    }
-  } catch (e) { /* 무시 */ }
-}
 </script>
 <!-- 음성 비서 위젯(2026-11-05): /console 과 같은 서버 경로를 쓰는 떠 있는 패널. 기존 줄은 그대로 두고 덧붙이기만 한다. -->
 <script src="/static/voice_widget.js?v=20261105"></script>

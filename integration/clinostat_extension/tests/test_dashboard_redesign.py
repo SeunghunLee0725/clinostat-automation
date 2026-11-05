@@ -181,7 +181,7 @@ def test_opened_settings_scroll_into_view_inside_the_card(work):
     assert "'toggle'" in fn and "scrollIntoView" in fn
 
 
-# ───────────── 검은 배경 · 흰 글자 · 흰 그래프선 (2026-10-29 3차) ─────────────
+# ───────────── 테마 블록 (2026-10-29 3차 검은 테마 → 2026-11-05 B안 연구실 노트) ─────────────
 
 import re
 
@@ -190,11 +190,12 @@ def _theme(work: str) -> str:
     return _between(work, '<style id="uiTheme">', "</style>")
 
 
-def test_theme_is_black_background_with_white_text(work):
+def test_theme_is_paper_background_with_ink_text(work):
+    """2026-11-05: 검은 배경·흰 글자를 종이 톤·먹색 글자로 바꿨다. 값 자체는 test_dashboard_theme 가 본다."""
     root = _between(_theme(work), ":root {", "}")
-    assert "--bg: #000000;" in root
-    assert "--text: #ffffff;" in root
-    assert "--on-primary: #000000;" in root, "흰 주 버튼 위 글자는 검정이어야 읽힌다"
+    assert "--bg: #F3F1EC;" in root
+    assert "--text: #2A2A28;" in root
+    assert "--on-primary: #FFFFFF;" in root, "청록 주 버튼 위 글자는 흰색이어야 읽힌다"
 
 
 def test_theme_has_no_light_surfaces_left(work):
@@ -211,11 +212,11 @@ def test_primary_buttons_are_white_on_black(work):
         assert "var(--primary)" in rule and "var(--on-primary)" in rule
 
 
-def test_chart_lines_are_white_on_black(work):
+def test_chart_lines_follow_the_theme(work):
     fn = _between(work, "function uiApplyChartTheme", "\n}")
-    assert "'#4cc9f0': '#ffffff'" in work, "주 계열선은 흰색"
-    assert re.search(r"paper_bgcolor: '#000000'", fn)
-    assert "marker" in fn, "중력벡터 점도 흰색이어야 한다"
+    assert "'#4cc9f0': '#334155'" in work, "주 계열선은 슬레이트"
+    assert re.search(r"paper_bgcolor: UI_WARM_PAPER", fn)
+    assert "marker" in fn, "중력벡터 점 색도 테마를 따른다"
 
 
 def test_panel_title_and_subtitle_are_gone(work):
