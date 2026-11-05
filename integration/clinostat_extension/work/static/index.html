@@ -1922,8 +1922,7 @@ window.addEventListener('resize', scheduleCameraResize);
             </select>
           </div>
           <label class="sb-check"><input id="emgNotch" type="checkbox" checked> 60 Hz 노치 (60·120·180 Hz 제거, 회색 = 원신호)</label>
-          <div class="sb-hint">포화가 나오면 범위를 넓히고, 신호가 수 mV 면 좁힌다. 범위는 보드에 저장된다.
-            노치는 화면에만 적용된다 — 포화가 있으면 노치 결과를 믿지 말 것.</div>
+          <div class="sb-hint">포화면 범위를 넓히고 수 mV 면 좁힌다(보드에 저장). 노치는 화면 표시에만, 포화 시 신뢰 불가.</div>
         </div>
       </details>
      </div>
@@ -2127,10 +2126,14 @@ async function spacebioFetch(path, options) {
 function spacebioSetStale(isStale) {
   const panel = sbEl('spacebioPanel');
   if (!panel) return;
-  panel.classList.toggle('sb-stale', isStale);
-  panel.querySelectorAll('button, input, select').forEach((node) => {
-    if (node.id === 'pumpResetEmergencyStop') return;
-    node.disabled = isStale;
+  // 펌프 카드는 가운데 열(#pumpDock)로 옮겨졌을 수 있다 — 같이 잠근다.
+  const scopes = [panel, sbEl('pumpDock')].filter(Boolean);
+  scopes.forEach((scope) => {
+    scope.classList.toggle('sb-stale', isStale);
+    scope.querySelectorAll('button, input, select').forEach((node) => {
+      if (node.id === 'pumpResetEmergencyStop') return;
+      node.disabled = isStale;
+    });
   });
   if (isStale) {
     sbEl('spacebioGatewayState').textContent = 'degraded (응답 없음)';
@@ -3262,6 +3265,25 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
 #spacebioPanel .sb-emg-chart .sb-chart-wrap { flex: 1 1 auto; height: auto !important; min-height: 200px; }
 #spacebioPanel .ui-row-emg > .sb-card { margin-top: 0 !important; }
 #spacebioPanel .sb-check { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+#spacebioPanel .sb-check input { width: auto; flex: none; margin: 0; }
+/* 저항센서 설정을 한 줄로(2026-10-30): 실험명 | Rref | 시간평균 N. 펼친 높이를 ≈50px 줄여
+   근육 카드와 같은 높이에 들어가게 한다. .sb-fields 를 풀어 칸들이 한 격자에 놓이게 한다. */
+#spacebioPanel .sb-sensor-card .sb-drop-body { display: grid; column-gap: 8px; row-gap: 2px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.7fr); align-items: end; }
+#spacebioPanel .sb-sensor-card .sb-drop-body .sb-fields { display: contents; }
+#spacebioPanel .sb-sensor-card .sb-drop-body > * { min-width: 0; }
+#spacebioPanel .sb-sensor-card .sb-drop-body input { width: 100%; }
+#spacebioPanel .sb-sensor-card label[for="spacebioExperimentName"] { grid-column: 1; grid-row: 1; }
+#spacebioPanel .sb-sensor-card #spacebioExperimentName { grid-column: 1; grid-row: 2; }
+#spacebioPanel .sb-sensor-card label[for="resistanceRref"] { grid-column: 2; grid-row: 1; }
+#spacebioPanel .sb-sensor-card #resistanceRref { grid-column: 2; grid-row: 2; }
+#spacebioPanel .sb-sensor-card label[for="resistanceAvgFactor"] { grid-column: 3; grid-row: 1; }
+#spacebioPanel .sb-sensor-card #resistanceAvgFactor { grid-column: 3; grid-row: 2; }
+#spacebioPanel .sb-sensor-card #resistanceSettingHint { grid-column: 1 / -1; }
+/* 가운데 열로 옮긴 펌프 1·2(2026-10-30). 좁은 화면에서는 위아래로 쌓인다. */
+#pumpDock { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+/* IMU 9칸은 센서가 연결됐을 때만(2026-10-30). .sensor-grid 의 display:grid 가 hidden 을 이기므로 막는다. */
+.sensor-grid[hidden] { display: none !important; }
 #spacebioPanel .sb-latch-banner { grid-column: 1 / -1; border-color: var(--danger-line); background: var(--danger-soft); }
 #spacebioPanel .sb-latch-banner[hidden] { display: none; }
 #spacebioPanel .sb-latch-banner h3 { color: var(--accent); }
@@ -3301,9 +3323,94 @@ details.sb-fold > summary { background: var(--surface); border: 1px solid var(--
     margin: 0 !important; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
   #spacebioPanel .ui-row-records #spacebioEvents { max-height: none; flex: 1 1 0; }
   #spacebioArchive .sb-arch-list { max-height: none; }
-  #spacebioPanel .ui-row-emg { flex: none; height: 300px; display: grid; }
+  #spacebioPanel .ui-row-emg { flex: none; height: var(--ui-device-card-h); display: grid; }
   #spacebioPanel .ui-row-emg > .sb-card { margin: 0 !important; min-height: 0; overflow-y: auto; }
+
+  /* 펌프 1·2 가 가운데 열 메트릭 아래로 갔다(2026-10-30). 메트릭 줄과 펌프 줄이 남은 높이를
+     반씩 나눠 열 바닥을 맞춘다. 오른쪽 기기 칸에는 저항센서만 남으므로 한 줄로 채운다. */
+  /* 실측(1920×1080 남은 높이 ≈405px, 1680×1050 ≈375px) — 최소 높이를 그보다 작게 둬야 열이 넘치지 않는다. */
+  .monitor .metrics-grid { flex: 1 1 0; min-height: 140px; }
+  .monitor #pumpDock { flex: 1 1 0; min-height: 140px; display: grid; gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr); grid-auto-rows: auto; }
+  .monitor #pumpDock #pumpCards > .sb-card { margin: 0; min-height: 0; overflow-y: auto; }
+  #spacebioPanel .ui-device-grid { grid-template-rows: minmax(0, 1fr); min-height: 420px; }
+
+  /* 저항센서·근육 카드를 같은 높이로, 설정을 펼쳐도 들어가는 높이에 고정(2026-10-30 실측:
+     펼친 내용 저항 ≈400·근육 ≈390 px). 기록 줄(이벤트·기록 관리·기록)이 나머지를 쓴다. */
+  #spacebioPanel { --ui-device-card-h: 400px; }
+  #spacebioPanel .ui-device-grid { flex: none; height: var(--ui-device-card-h); min-height: 0; }
+  #spacebioPanel .ui-row-records { flex: 1 1 0; height: auto; min-height: 150px; }
 }
+</style>
+<style id="uiHeightCaps">
+/* ── 늘어나는 줄의 상한 (2026-11-05) ─────────────────────────────────────
+   타일 배치는 열을 화면 높이에 맞춘다. 저항센서·근육 줄이 400px 고정이라, 큰 모니터(예: 5120×2588)에서는
+   남는 높이를 기록 줄(이벤트·기록 관리·기록)과 가운데 열 펌프·메트릭 칸이 전부 흡수해 기록 관리 목록이
+   수십 행 노출되고 펌프 칸이 900px 넘게 늘어났다. 남는 공간을 채우되 상한을 두고, 목록은 칸 안에서 스크롤한다.
+   값은 1080p(남는 높이 ≈180px) 에서는 영향이 없고 그보다 큰 화면에서만 작동한다. */
+@media (min-width: 1600px) {
+  #spacebioPanel .ui-row-records { max-height: 460px; }
+  #spacebioArchive .sb-arch-list { max-height: 360px; overflow-y: auto; }
+  #spacebioPanel .ui-row-records #spacebioEvents { max-height: 400px; }
+  .monitor .metrics-grid { max-height: 520px; }
+  .monitor #pumpDock { max-height: 340px; }
+}
+/* 좁은 화면(비타일)에서도 기록 관리 목록은 10행 안팎 이상 길어지지 않는다. */
+#spacebioArchive .sb-arch-list { max-height: 360px; }
+</style>
+<style id="uiScale">
+/* ── 큰 화면 배율 (2026-11-05) ──────────────────────────────────────────
+   글자·카드 크기가 px 로 박혀 있어 5120×2588 같은 모니터에서는 글자가 너무 작다. 창 너비 단계별로
+   body 를 zoom 으로 키운다. Chrome 은 zoom 안에서 100vh 도 함께 커지므로 타일 배치의 body 높이(100vh)를
+   배율로 나눠 화면에 맞춘다. 이 블록은 타일 블록·높이 상한 블록보다 뒤에 있어 같은 우선순위에서 이긴다.
+   브라우저 확대(⌘+)를 쓰면 CSS 너비가 줄어 단계가 내려가므로 둘이 겹쳐 과하게 커지지 않는다. */
+@media (min-width: 2400px) {
+  body { zoom: 1.5; height: calc(100vh / 1.5); min-height: calc(100vh / 1.5); }
+}
+@media (min-width: 3600px) {
+  body { zoom: 1.75; height: calc(100vh / 1.75); min-height: calc(100vh / 1.75); }
+}
+@media (min-width: 4800px) {
+  body { zoom: 2; height: calc(100vh / 2); min-height: calc(100vh / 2); }
+}
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style id="uiThemeWarmLab">
+/* ── B안 연구실 노트 (2026-11-05) ───────────────────────────────────────
+   따뜻한 종이 톤 바탕 · 연한 카드 · 먹색 글자 · 청록 강조 · 세이지 보조. 검은 배경 테마(uiTheme)의 변수를
+   덮어쓰고, 그 블록이 hex 로 박아 둔 몇 줄만 같은 선택자로 다시 쓴다. 차트 색은 아래 스크립트가 맡는다.
+   참고: Figma 'Scientific Laboratory Data Recording Dashboard', 'Clinical Dashboard'. */
+:root {
+  --bg: #F3F1EC; --surface: #FFFDF9; --card: #FFFDF9;
+  --accent: #B91C1C; --green: #0F766E; --blue: #0F766E; --orange: #C2410C;
+  --text: #2A2A28; --text-dim: #6B6760; --radius: 10px;
+  --line: #E4DFD5; --line-strong: #D8D2C6; --fill-soft: #F3F1EC; --field: #FFFDF9;
+  --primary: #0F766E; --primary-hover: #115E59; --on-primary: #FFFFFF;
+  --danger-hover: #991B1B; --danger-soft: rgba(185,28,28,.07); --danger-line: rgba(185,28,28,.4);
+  --sage: #8AB4A8; --slate: #334155;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+body { font-family: 'Noto Sans KR', -apple-system, 'Pretendard', 'Apple SD Gothic Neo', 'Segoe UI', system-ui, sans-serif; }
+header { background: var(--bg); border-bottom: 2px solid var(--line); }
+.outer-color { color: var(--slate); } .inner-color { color: var(--green); }
+select:focus, input:focus { box-shadow: 0 0 0 3px rgba(15,118,110,.18); }
+button:hover { border-color: #C9C2B4; }
+.btn-test { border-color: rgba(194,65,12,.5); }
+.card, .metric-card, .chart-card, .sensor-card, .metric-paper, .cam-card, .live-strip,
+#spacebioPanel .sb-card, details.sb-fold > summary { border-radius: 14px; }
+.card h3, .cam-card h3, .metric-paper h4, #spacebioPanel .sb-card h3 { color: var(--text); }
+#spacebioPanel .sb-badge { background: rgba(194,65,12,.12); color: #9A3412; }
+#spacebioPanel .sb-badge.sb-live { background: rgba(15,118,110,.12); color: #0F766E; }
+#spacebioPanel #spacebioEvents, #spacebioPanel .sb-readouts, .func-desc, .I5-gauge .col, .summary-row .pair { background: var(--fill-soft); }
+.status-dot { background: var(--line-strong); } .status-dot.on { background: var(--green); }
+.btn-stop, .cam-toggle.off, #spacebioPanel button.sb-danger { color: #FFFFFF; }
+::selection { background: rgba(15,118,110,.2); }
+/* 남아 있던 어두운 조각: 카메라 틀(꺼짐 상태)과 기록 관리의 '받기' 링크 버튼 */
+.cam-wrap { background: #EFEAE0; color: var(--text-dim); }
+#spacebioArchive .sb-arch-download { background: var(--field); color: var(--text); border: 1px solid var(--line-strong); }
+#spacebioArchive .sb-arch-download:hover { background: var(--fill-soft); }
 </style>
 <script>
 // 차트 색은 baseline 줄(어두운 배경용)에 박혀 있다 — 줄을 고치지 않고 그려진 뒤에 바꾼다.
@@ -3378,10 +3485,21 @@ function uiApplyTileLayout() {
   if (grid && !panel.querySelector('.ui-device-grid')) {
     const devices = document.createElement('div');
     devices.className = 'ui-device-grid';
-    [card('resistanceModeBadge'), document.getElementById('pumpCards'),
-     document.getElementById('pumpLatchBanner')]
+    [card('resistanceModeBadge')]
       .filter(Boolean).forEach((el) => devices.appendChild(el));
     grid.parentNode.insertBefore(devices, grid);
+
+    // 펌프 1·2 는 가운데 열 논문 메트릭(극관 집중도·위도 밴드 밀도) 아래로 옮긴다(2026-10-30).
+    // 메트릭을 보며 바로 주입·정지할 수 있게. 래치 해제 줄도 펌프와 함께 다닌다.
+    const metrics = document.querySelector('.monitor .metrics-grid');
+    if (metrics && !document.getElementById('pumpDock')) {
+      const dock = document.createElement('div');
+      dock.id = 'pumpDock';
+      [document.getElementById('pumpCards'), document.getElementById('pumpLatchBanner')]
+        .filter(Boolean).forEach((el) => dock.appendChild(el));
+      metrics.parentNode.insertBefore(dock, metrics.nextSibling);
+      uiMirrorPanelStyles();
+    }
 
     // 기록 카드는 접힘(▸ 기록 상태) 안에 있다 — 타일 줄에서는 꺼내 이벤트·기록 관리 옆에 둔다.
     const recordsRow = document.createElement('div');
@@ -3404,16 +3522,39 @@ function uiApplyTileLayout() {
   }
   // 카드 안에서 설정을 펼치면 펼친 부분이 보이도록 카드 안쪽을 스크롤한다.
   // toggle 은 버블링되지 않아 캡처로 받는다 — 나중에 만들어지는 펌프 카드도 잡힌다.
-  if (!panel.dataset.uiToggle) {
-    panel.dataset.uiToggle = '1';
-    panel.addEventListener('toggle', (ev) => {
+  [panel, document.getElementById('pumpDock')].filter(Boolean).forEach((scope) => {
+    if (scope.dataset.uiToggle) return;
+    scope.dataset.uiToggle = '1';
+    scope.addEventListener('toggle', (ev) => {
       const box = ev.target;
       if (box.matches && box.matches('details.sb-drop') && box.open) {
         box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       }
     }, true);
-  }
+  });
   window.dispatchEvent(new Event('resize'));
+}
+// 패널 한정 스타일(#spacebioPanel …)을 가운데 열로 옮긴 펌프(#pumpDock)에도 똑같이 건다.
+// 규칙을 두 벌로 고쳐 쓰지 않고 로드 뒤 한 번 복제한다 — 테마·타일 규칙이 바뀌어도 따라온다.
+// 패널 자체의 배치 규칙(`#spacebioPanel` 단독 선택자)은 복제하지 않는다.
+function uiMirrorPanelStyles() {
+  const toDock = (selectorText) => selectorText.split(',').map((x) => x.trim())
+    .filter((x) => x.startsWith('#spacebioPanel') && x !== '#spacebioPanel')
+    .map((x) => '#pumpDock' + x.slice('#spacebioPanel'.length)).join(', ');
+  const walk = (container) => {
+    const rules = container.cssRules;
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const rule = rules[i];
+      if (rule instanceof CSSMediaRule) { walk(rule); continue; }
+      if (!(rule instanceof CSSStyleRule) || !rule.selectorText.includes('#spacebioPanel')) continue;
+      const sel = toDock(rule.selectorText);
+      if (!sel) continue;
+      try { container.insertRule(sel + ' { ' + rule.style.cssText + ' }', i + 1); } catch (e) { /* 이 규칙만 건너뛴다 */ }
+    }
+  };
+  Array.from(document.styleSheets).forEach((sheet) => {
+    try { walk(sheet); } catch (e) { /* 다른 출처 스타일시트(글꼴 등)는 읽을 수 없다 */ }
+  });
 }
 window.addEventListener('load', () => {
   uiApplyTileLayout();
@@ -3632,6 +3773,154 @@ window.addEventListener('load', () => {
   }).catch(() => {});
   spacebioFetch('/api/spacebio/emg/latest').then(emgRender).catch(() => {});
 });
+</script>
+<script>
+// IMU 값 줄(Roll~Gyro 9칸)은 센서가 연결됐을 때만 보인다(2026-10-30). 연결 버튼·해제 버튼·
+// 첫 상태 조회가 모두 dotSensor 의 'on' 을 바꾸므로 그 점만 지켜본다 — baseline 줄은 그대로.
+function uiSyncImuRow() {
+  const dot = document.getElementById('dotSensor');
+  const row = document.querySelector('.sensor-grid');
+  if (!dot || !row) return;
+  const connected = dot.classList.contains('on');
+  if (row.hidden === !connected) return;
+  row.hidden = !connected;
+  window.dispatchEvent(new Event('resize'));   // 아래 그래프들이 남은 높이를 다시 잡게
+}
+function uiWatchImuConnection() {
+  const dot = document.getElementById('dotSensor');
+  if (!dot) return;
+  new MutationObserver(uiSyncImuRow).observe(dot, { attributes: true, attributeFilter: ['class'] });
+  uiSyncImuRow();
+}
+uiWatchImuConnection();
+</script>
+<script>
+// B안 연구실 노트 차트 색 (2026-11-05). 위의 흑백 치환 함수와 같은 이름으로 다시 선언해 DOMContentLoaded 때
+// 이 판이 불린다(함수 선언은 나중 스크립트가 이긴다). 주 계열 슬레이트, 둘째 계열 청록, 보조 세이지, 기준선 모래색.
+const UI_WARM_SERIES = { '#4cc9f0': '#334155', '#0cca4a': '#0F766E', '#f8961e': '#8AB4A8', '#888': '#B8B1A3',
+                         '#ffffff': '#0F766E', '#525252': '#B8B1A3' };
+const UI_WARM_FILLS = { 'rgba(76, 201, 240, 0.7)': 'rgba(51, 65, 85, 0.85)',
+                        'rgba(248, 150, 30, 0.7)': 'rgba(138, 180, 168, 0.9)' };
+const UI_WARM_SPHERE_SCALE = [[0, '#D8D2C6'], [1, '#0F766E']];
+const UI_WARM_PAPER = '#FFFDF9';
+function uiApplyChartTheme() {
+  const grid = '#EFEAE0', tick = '#6B6760', label = '#2A2A28';
+  if (window.Chart && Chart.getChart) {
+    document.querySelectorAll('canvas').forEach((cv) => {
+      try {
+        const chart = Chart.getChart(cv);
+        if (!chart) return;
+        Object.values(chart.options.scales || {}).forEach((s) => {
+          if (s.grid) s.grid.color = grid;
+          if (s.ticks) s.ticks.color = tick;
+          if (s.title) s.title.color = label;
+        });
+        const legend = chart.options.plugins && chart.options.plugins.legend;
+        if (legend && legend.labels) legend.labels.color = label;
+        chart.data.datasets.forEach((d) => {
+          const c = UI_WARM_SERIES[String(d.borderColor).toLowerCase()];
+          if (c) d.borderColor = c;
+          const fill = UI_WARM_FILLS[String(d.backgroundColor)];
+          if (fill) d.backgroundColor = fill;
+        });
+        chart.update('none');
+      } catch (e) { /* 테마 실패는 무시 — 기본 색으로 남는다 */ }
+    });
+  }
+  try {
+    if (typeof sphereLayout !== 'undefined' && window.Plotly) {
+      const axis = { color: tick, gridcolor: '#E4DFD5', zerolinecolor: '#D8D2C6' };
+      Object.assign(sphereLayout, { paper_bgcolor: UI_WARM_PAPER, plot_bgcolor: UI_WARM_PAPER });
+      Object.assign(sphereLayout.scene, { bgcolor: UI_WARM_PAPER });
+      ['xaxis', 'yaxis', 'zaxis'].forEach((k) => Object.assign(sphereLayout.scene[k], axis));
+      Plotly.relayout('sphereDiv', sphereLayout);
+      const sphereDiv = document.getElementById('sphereDiv');
+      const toWarm = () => {
+        const tr = sphereDiv.data && sphereDiv.data[0];
+        if (!tr || !tr.marker) return;
+        if (Array.isArray(tr.marker.color) && tr.marker.colorscale !== UI_WARM_SPHERE_SCALE) {
+          Plotly.restyle(sphereDiv, { 'marker.colorscale': [UI_WARM_SPHERE_SCALE] });
+        } else if (typeof tr.marker.color === 'string' && tr.marker.color !== '#334155') {
+          Plotly.restyle(sphereDiv, { 'marker.color': '#334155' });
+        }
+      };
+      if (!sphereDiv.dataset.uiWarm) {
+        sphereDiv.dataset.uiWarm = '1';
+        sphereDiv.on('plotly_afterplot', toWarm);
+      }
+      toWarm();
+    }
+  } catch (e) { /* 무시 */ }
+}
+</script>
+<!-- 음성 비서 위젯(2026-11-05): /console 과 같은 서버 경로를 쓰는 떠 있는 패널. 기존 줄은 그대로 두고 덧붙이기만 한다. -->
+<script src="/static/voice_widget.js?v=20261105"></script>
+<script>
+// 음성 비서가 돌려준 action 을 이 화면의 기존 함수로만 실행한다. 비서의 글은 실행되지 않는다.
+(function () {
+  function must(r, what) { if (!r || r.ok === false) throw new Error(what + ': ' + ((r && r.error) || '원인 미상')); return r; }
+  const executors = {
+    pump_run: async (p) => {
+      await spacebioFetch('/api/spacebio/pump/step', { method: 'POST', body: {
+        pump_id: p.pump_id, steps: Math.round(p.hz * p.sec), spm: Math.round(p.hz * 60) } });
+      spacebioLog('펌프 ' + p.pump_id + ' ' + p.hz + 'Hz ' + p.sec + '초 구동 (음성)');
+    },
+    pump_stop: async (p) => {
+      await spacebioFetch('/api/spacebio/pump/stop', { method: 'POST', body: p.pump_id ? { pump_id: p.pump_id } : {} });
+      spacebioLog(p.pump_id ? '펌프 ' + p.pump_id + ' 정지 (음성)' : '모든 펌프 정지 (음성)');
+    },
+    clinostat_stop: async () => {
+      must(await api('POST', '/api/control/stop'), '클리노스텟 정지');
+      const next = cloneData(appState.controlConfig);
+      next.outer.enabled = false;
+      next.inner.enabled = false;
+      setAppState({ running: false, controlConfig: next });
+      spacebioLog('클리노스텟 정지 (음성)');
+    },
+    clinostat_start: async () => {
+      const supervised = withSupervisionAck(appState.controlConfig);
+      if (!supervised) throw new Error('안전 확인 체크박스를 먼저 체크하세요');
+      must(await api('POST', '/api/control/start', supervised), '클리노스텟 시작');
+      setAppState({ running: true });
+      spacebioLog('클리노스텟 시작 (음성)');
+    },
+    stop_all: async () => { await stopAllMotion(); },
+    estop: async () => {
+      await spacebioFetch('/api/spacebio/pump/emergency-stop', { method: 'POST', body: {} });
+      spacebioLog('비상 정지 — 모든 펌프 래치됨 (음성)');
+    },
+    sensor_start: async () => {
+      if (spacebioSessionState !== 'recording') await spacebioStartSession();
+      await spacebioConfigureSensor();
+      await spacebioFetch('/api/spacebio/sensor/start', { method: 'POST', body: {} });
+      spacebioResetChart();
+      spacebioLog('측정 시작 — 기록 중 (음성)');
+    },
+    sensor_stop: async () => {
+      await spacebioFetch('/api/spacebio/sensor/stop', { method: 'POST', body: {} });
+      const finished = await spacebioFinishSession();
+      spacebioLog(finished ? '측정 정지 — 기록 저장 (' + finished + ') (음성)' : '측정 정지 (음성)');
+    },
+    experiment_run: async (p) => {
+      const r = must(await api('POST', '/api/experiment/run', {
+        strategy: p.strategy, params: p.params || {}, duration_s: p.duration_s }), '실험 시작');
+      const runId = (r.status && r.status.run_id) || '';
+      spacebioLog('실험 시작 — ' + p.strategy + ' ' + p.duration_s + ' s' + (runId ? ' (' + runId + ')' : '') + ' (음성)');
+    },
+    experiment_stop: async () => {
+      must(await api('POST', '/api/experiment/stop'), '실험 중단');
+      spacebioLog('실험 중단 요청 (음성)');
+    },
+    strategy_set: async (p) => {
+      const base = (appState.strategyMap[p.name] && appState.strategyMap[p.name].params) || {};
+      const params = Object.assign({}, cloneData(base), p.params || {});
+      must(await api('POST', '/api/strategy', { name: p.name, params }), '조건 설정');
+      setAppState({ selectedStrategy: p.name, strategyParams: params, activeStrategy: p.name, activeStrategyParams: cloneData(params) });
+      spacebioLog('운전 조건 설정 — ' + p.name + ' (음성)');
+    },
+  };
+  window.addEventListener('DOMContentLoaded', () => VoiceAssistant.mount({ executors, log: spacebioLog }));
+})();
 </script>
 </body>
 </html>

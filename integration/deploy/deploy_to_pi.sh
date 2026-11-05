@@ -38,6 +38,7 @@ declare -a EXTENSION_PAIRS=(
   "clinostat_extension/work/assistant_tools.py:$CLINOSTAT_ROOT/assistant_tools.py"
   "clinostat_extension/work/static/index.html:$CLINOSTAT_ROOT/static/index.html"
   "clinostat_extension/work/static/console.html:$CLINOSTAT_ROOT/static/console.html"
+  "clinostat_extension/work/static/voice_widget.js:$CLINOSTAT_ROOT/static/voice_widget.js"
 )
 
 say() { printf '==> %s\n' "$*"; }

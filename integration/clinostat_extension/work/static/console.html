@@ -92,6 +92,27 @@ section.cols4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14p
   .grid4{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 </style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<style id="csThemeWarmLab">
+/* B안 연구실 노트 (2026-11-05) — 기존 화면(/)과 같은 종이 톤·청록 강조. 위 :root 변수를 덮어쓴다. */
+:root{
+  --bg:#F3F1EC; --bar:#F3F1EC; --card:#FFFDF9; --card2:#F3F1EC; --line:#E4DFD5; --line2:#D8D2C6;
+  --text:#2A2A28; --text2:#44403C; --mute:#6B6760; --accent:#0F766E; --accent2:#C2410C;
+  --ok-bg:#E6F2EF; --ok-fg:#0F766E; --warn-bg:#FBEEDC; --warn-fg:#9A3412; --bad-bg:#FBE9E4; --bad-fg:#991B1B;
+  --mute-bg:#EFEAE0; --sans:'Noto Sans KR','IBM Plex Sans KR',system-ui,sans-serif; --disp:'Noto Sans KR',var(--sans);
+}
+header{border-bottom:2px solid var(--line)}
+.btn{background:#FFFDF9} .btn:hover{border-color:#C9C2B4;background:#F3F1EC}
+.btn.primary{color:#FFFFFF} .btn.primary:hover{background:#115E59}
+.btn.danger{background:#FBE9E4;color:#991B1B;border-color:#F1C7BD} .btn.danger:hover{background:#F6D9D1}
+.num,.card h2{color:#2A2A28}
+.bubble.me{background:#EFEAE0;color:#2A2A28} .bubble.ai{background:#E6F2EF;color:#134E4A}
+nav.side a:hover{background:#EFEAE0;color:#2A2A28}
+.voice{background:#FFFDF9}
+.mic{background:#F3F1EC;color:#44403C} .mic.on{box-shadow:0 0 0 8px rgba(15,118,110,.12)}
+.brand .mark{background:#E6F2EF}
+</style>
 </head>
 <body>
 
