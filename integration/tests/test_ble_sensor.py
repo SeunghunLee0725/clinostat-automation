@@ -13,7 +13,7 @@ from gateway.ble_packet import (
     BlePacketError,
     parse_sensor_packet,
 )
-from gateway.ble_sensor import BleSensorSource, BleTarget, _BleakClientAdapter
+from gateway.ble_sensor import BleSensorSource, BleTarget, _BleakClientAdapter, FIXED_GAIN, FIXED_PGA, FIXED_SAMPLING_RATE_HZ
 from gateway.sensor_source import SensorSourceError
 
 
@@ -349,18 +349,24 @@ async def test_reconnects_after_disconnect_and_keeps_streaming():
 
 
 @pytest.mark.asyncio
-async def test_gives_up_after_max_reconnects_and_reports_error():
-    """무한 재시도로 조용히 매달려 있으면 안 된다 — 결국은 알려야 한다."""
+async def test_keeps_retrying_with_backoff_when_reconnect_keeps_failing():
+    """회전 중 끊김은 흔하다 — 몇 회로 포기하면 남은 실험 구간을 통째로 잃는다 (2026-09-04).
+
+    끊긴 뒤 재연결이 계속 실패해도 오류로 올리지 않고 backoff 로 재시도를 이어 간다.
+    (예전에는 max_reconnects 회 뒤 FAULT 였다. 인자는 호환을 위해 남아 있을 뿐 상한이 아니다.)
+    """
     client = FlakyBleClient([[_packet()]], reconnect_ok=False)
     src = BleSensorSource(target=BleTarget(), client_factory=lambda: client,
                           max_reconnects=1)
     src.start()
-    for _ in range(200):
-        await asyncio.sleep(0.05)
-        if src._error is not None:
-            break
-    with pytest.raises(SensorSourceError, match="재연결"):
-        src.tick()
+    await _drain(src, 1)                      # 첫 라운드 수신 → 끊김
+    await asyncio.sleep(1.4)                  # 1차 재시도(1 s 뒤)는 지나고 2차(2 s 뒤)는 아직
+    assert client.connect_calls >= 2, "끊긴 뒤 재연결을 시도해야 한다"
+    assert src._error is None, "재연결 실패가 쌓여도 오류로 올리지 않는다"
+    src.tick()                                # 예외 없음
+    await asyncio.sleep(2.2)                  # 2차 재시도까지 지남
+    assert client.connect_calls >= 3, "backoff 로 계속 재시도한다"
+    assert src._error is None
     await src.aclose()
 
 
@@ -536,7 +542,8 @@ async def test_rref_is_pushed_to_the_device_on_connect():
     assert client.configs, "연결 후 설정 패킷을 보내지 않았다"
     rate, rref, gain, pga = client.configs[0]
     assert rref == 47_000.0
-    assert (rate, gain, pga) == (50, 1.0, 8), "고정 파라미터는 펌웨어 값과 같아야 한다"
+    # 2026-09-04 회로 확정: PGA 2(±2.048 V). 숫자를 박지 않고 게이트웨이 상수와 맞춘다.
+    assert (rate, gain, pga) == (FIXED_SAMPLING_RATE_HZ, FIXED_GAIN, FIXED_PGA), "고정 파라미터는 펌웨어 값과 같아야 한다"
 
 
 @pytest.mark.asyncio
