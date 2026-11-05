@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-11-05 — 기존 대시보드(/)에 음성 비서 위젯 (파이 배포 완료)
+
+| 항목 | 상태 |
+|---|---|
+| 위젯 | `work/static/voice_widget.js` — 오른쪽 아래 마이크 버튼(FAB) → 패널(마이크·말풍선·[실행]/[취소]·글 입력·상황 보고·TTS/자동 보고 체크). `/console` 과 같은 서버 경로(`/api/assistant/status`·`/chat`·`/command`)와 같은 확인 정책 |
+| index.html | 맨 끝에 `<script src="/static/voice_widget.js?v=20261105">` + 실행기 묶음만 **덧붙임**(베이스라인 가드 통과). 실행기는 이 화면의 기존 함수(`api`·`spacebioFetch`·`withSupervisionAck`·`stopAllMotion`·세션 함수)만 쓴다. `VoiceAssistant.mount({executors, log: spacebioLog})` |
+| 실행기 | pump_run(step)·pump_stop·clinostat_stop/start(감독 체크박스 필요)·stop_all·estop(emergency-stop)·sensor_start/stop(세션 열기/닫기 포함)·experiment_run(`/api/experiment/run`)·experiment_stop·strategy_set(프리셋 파라미터에 덮어씀) |
+| 콘솔 | `/console` 은 자체 구현 유지(위젯 미사용) |
+| 테스트 | `test_dashboard_voice.py` 19건. 확장 603 passed, 전체 1035 passed(+ test_ble_sensor 2건 기존 실패) |
+| 파이 배포 | index.html·voice_widget.js (백업 `~/spacebio-backups/20261105_152016_voice_widget`). 정적 파일이라 재시작 없음. **이번 index.html 에는 10-30 미배포분(펌프 카드 가운데 열 이동·저항센서 설정 한 줄·IMU 9칸 숨김)이 함께 나갔다** |
+| 큰 화면 보정 | 5120×2588 모니터에서 타일 배치가 남는 높이(1,682px)를 기록 줄에 몰아줘 기록 관리 목록 97행 노출·펌프 칸 922px. `<style id="uiHeightCaps">`(타일 블록 뒤, 덧붙임)로 기록 줄 ≤460·기록 관리 목록 ≤360(내부 스크롤)·이벤트 ≤400·메트릭 ≤520·펌프 칸 ≤340px. 1080p 에서는 영향 없음. 가드 `test_dashboard_height_caps.py`. 실측 후 460/360/340/520 확인 |
+| 테마 B안 '연구실 노트' | 검정·흰 글자 대신 종이 톤. `<style id="uiThemeWarmLab">`(uiScale 뒤)가 uiTheme 의 :root 변수를 덮어쓰고 hex 로 박힌 줄(outer/inner 색·배지·호버)만 같은 선택자로 다시 씀. 차트는 `function uiApplyChartTheme()` 를 끝에서 **같은 이름으로 재선언**(나중 선언이 전역 바인딩을 이김; 호출은 DOMContentLoaded) — 슬레이트 #334155 / 청록 #0F766E / 세이지 #8AB4A8, 구면 배경 #FFFDF9. Google Fonts Noto Sans KR + IBM Plex Mono. 음성 위젯 CSS 는 var(--surface, 어두운 기본값) 식으로 페이지 변수 추종. `/console` 도 `<style id="csThemeWarmLab">` 로 같은 팔레트. Figma 참고: Scientific Laboratory Data Recording Dashboard · Clinical Dashboard. 디자인 3안 캔버스: https://claude.ai/artifact/LVxAySGWw6XqFcUmFYShbC . 가드 `test_dashboard_theme.py`. 배포 백업 `~/spacebio-backups/20261105_155424_warmlab` |
+| 큰 화면 배율 | 글자가 px 고정이라 5K 에서 너무 작음. `<style id="uiScale">`: 창 너비 ≥2400px zoom 1.5 / ≥3600 1.75 / ≥4800 2. Chrome 은 zoom 안에서 100vh 도 커지므로 body `height/min-height: calc(100vh / Z)` 로 보정(안 하면 아래가 잘림). 스타일은 body 안에 있어 head 에 넣은 테스트 스타일이 지던 것에 주의 — 블록 순서가 우선순위다. 가드 테스트 5건 추가 |
+| 실측 | Chrome 에서 `/` → 마이크 FAB → 칩 "Claude sonnet" → "지금 상태 한 문장으로 알려 줘" → 6.5 s 에 상태 요약(게이트웨이 degraded·펌프 fault·클리노스텟 정지). 콘솔 오류 없음 |
+
+---
+
 ## 2026-11-03 — 음성 비서를 구독제 Claude 로 교체, 대화로 실험 실행까지 (파이 배포 완료)
 
 ### 지금 상태 (이 줄만 읽어도 됨)
