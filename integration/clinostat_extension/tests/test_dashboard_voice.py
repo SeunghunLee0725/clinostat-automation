@@ -107,3 +107,30 @@ def test_index_executors_reuse_the_existing_page_functions(index):
 def test_console_is_unchanged_by_the_widget(index):
     """콘솔은 자체 구현을 유지한다 — 위젯은 기존 화면 전용이다."""
     assert "voice_widget.js" not in CONSOLE.read_text(encoding="utf-8")
+
+
+# ─────────────────────────── HTTP 출처 · TTS (2026-11-08) ───────────────────────────
+
+def test_widget_explains_why_the_mic_is_blocked_on_http_and_links_to_https(widget):
+    """Chrome 은 HTTP(비보안 출처)에서 마이크를 막는다(not-allowed). 위젯은 그 사실과 HTTPS 주소를 보여 준다."""
+    assert "isSecureContext" in _block(widget, "function initSpeech(")
+    assert "https_url" in _block(widget, "async function probe(")
+    errors = _block(widget, "const SR_ERRORS = {", "\n  };")
+    for code in ("not-allowed", "no-speech", "audio-capture", "network"):
+        assert f"'{code}'" in errors
+    assert "SR_ERRORS[" in _block(widget, "function initSpeech(")
+
+
+def test_widget_tts_prefers_natural_korean_voices_and_speaks_sentence_by_sentence(widget):
+    speak = _block(widget, "function speak(")
+    assert "pickVoice(" in speak and "normalizeForSpeech(" in speak and "splitSentences(" in speak
+    assert "rate = 1.0" in speak
+    pick = _block(widget, "function pickVoice(")
+    assert "NOVELTY_VOICES" in pick and "PREFERRED_VOICES" in pick
+    assert "'Grandma'" in _block(widget, "const NOVELTY_VOICES = [", "];")
+    assert 'id="vaVoice"' in widget and "savedVoiceName()" in pick
+    assert "localStorage" in _block(widget, "function savedVoiceName(")   # 운영자가 고른 목소리는 브라우저에 남는다
+    assert "SPEECH_WORDS" in _block(widget, "function normalizeForSpeech(")
+    words = _block(widget, "const SPEECH_WORDS = [", "];")
+    for token in ("degraded", "fault", "rpm", "hz", "kΩ"):
+        assert token in words

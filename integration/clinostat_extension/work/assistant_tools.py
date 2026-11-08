@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -108,3 +109,23 @@ def strategies_brief(registry: Mapping[str, Any], presets: Mapping[str, Any], cu
         items.append({"name": name, "description": preset.get("description", ""),
                       "params": dict(preset.get("params", {}) or {})})
     return {"current": current or "", "strategies": items}
+
+
+def tailscale_https_url() -> str | None:
+    """`tailscale status --json` 의 CertDomains[0] → https 주소. Tailscale 이 없거나 HTTPS 미설정이면 None.
+
+    Chrome 은 HTTP(비보안 출처)에서 마이크를 막으므로 음성 비서 위젯이 이 주소를 안내한다.
+    """
+    try:
+        done = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        domains = json.loads(done.stdout).get("CertDomains")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(domains, list) or not domains or not isinstance(domains[0], str):
+        return None
+    return "https://" + domains[0]

@@ -362,3 +362,16 @@ def test_server_chat_route_never_executes_the_action():
     for forbidden in ("experiment_runner.start", "control.start", "/api/spacebio/pump/step",
                       "pump/dispense", "control.apply_speed_config"):
         assert forbidden not in block
+
+
+def test_system_prompt_asks_for_spoken_korean_without_english_status_words():
+    """답은 TTS 로 읽히므로 degraded/fault/rpm 같은 영문 상태어를 한국어로 풀어 말하게 한다."""
+    assert "저하" in SYSTEM and "고장" in SYSTEM and "구어체" in SYSTEM
+
+
+def test_server_status_route_reports_the_https_url():
+    source = SERVER.read_text(encoding="utf-8")
+    block = source[source.index('"/api/assistant/status"'):]
+    block = block[:block.index("\n@app.", 1)]
+    assert '"https_url"' in block
+    assert "assistant_tools.tailscale_https_url(" in source

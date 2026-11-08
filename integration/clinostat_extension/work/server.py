@@ -127,6 +127,8 @@ async def lifespan(app: FastAPI):
     # .env(파이 로컬, 커밋 금지)의 CLINOSTAT_CLAUDE_SSH/BIN/MODEL·CLAUDE_CODE_OAUTH_TOKEN. 값은 로그에 남기지 않는다.
     assistant_claude.load_env_file(Path(__file__).parent / ".env")
     app.state.assistant_claude = assistant_claude.ClaudeAssistant.from_env()
+    # Chrome 은 HTTP 에서 마이크를 막는다 — Tailscale 인증서 도메인이 있으면 위젯이 HTTPS 주소를 안내한다.
+    app.state.https_url = assistant_tools.tailscale_https_url()
     yield
     # 종료 시 정리
     # (하드웨어 정지가 항상 먼저다. SpaceBio 클라이언트는 그 뒤에 닫는다.)
@@ -1368,7 +1370,8 @@ async def assistant_status(request: Request):
     claude = request.app.state.assistant_claude
     claude_state = (await claude.client.probe() if claude else
                     {"configured": False, "logged_in": False, "error": "claude CLI 미설정 (.env 의 CLINOSTAT_CLAUDE_SSH 또는 _BIN)"})
-    return {"hosts": await request.app.state.assistant_llm.probe(), "stt": "browser", "claude": claude_state}
+    return {"hosts": await request.app.state.assistant_llm.probe(), "stt": "browser", "claude": claude_state,
+            "https_url": getattr(request.app.state, "https_url", None)}
 
 
 @app.post("/api/assistant/command")

@@ -105,3 +105,37 @@ def test_strategies_brief_drops_formula_and_keeps_params():
     assert brief["current"] == "halton"
     assert brief["strategies"] == [{"name": "constant", "description": "상수", "params": {"inner_rad_s": 0.5}},
                                    {"name": "halton", "description": "", "params": {}}]
+
+
+# ─────────────────────────── Tailscale HTTPS 주소 ───────────────────────────
+
+class _Done:
+    def __init__(self, returncode, stdout):
+        self.returncode, self.stdout = returncode, stdout
+
+
+def test_tailscale_https_url_uses_the_first_cert_domain(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _Done(0, json.dumps({"CertDomains": ["clinostat-pi.tail9f896d.ts.net"], "Self": {}}))
+
+    monkeypatch.setattr(at.subprocess, "run", fake_run)
+    assert at.tailscale_https_url() == "https://clinostat-pi.tail9f896d.ts.net"
+    assert seen["cmd"][:3] == ["tailscale", "status", "--json"]
+
+
+@pytest.mark.parametrize("outcome", [
+    _Done(1, ""), _Done(0, "not json"), _Done(0, json.dumps({"CertDomains": None})), _Done(0, json.dumps({})),
+])
+def test_tailscale_https_url_is_none_without_a_certificate_domain(monkeypatch, outcome):
+    monkeypatch.setattr(at.subprocess, "run", lambda *a, **k: outcome)
+    assert at.tailscale_https_url() is None
+
+
+def test_tailscale_https_url_is_none_when_the_cli_is_missing(monkeypatch):
+    def boom(*a, **k):
+        raise FileNotFoundError("tailscale")
+    monkeypatch.setattr(at.subprocess, "run", boom)
+    assert at.tailscale_https_url() is None
