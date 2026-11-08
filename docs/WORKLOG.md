@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-11-08 — 음성 비서 "에러" 원인: HTTP 출처의 마이크 차단 → HTTPS(tailscale serve) + 위젯 안내·TTS 개선 (파이 배포 완료)
+
+| 항목 | 상태 |
+|---|---|
+| 증상·원인 | `http://100.77.1.42:8000/` 에서 마이크를 누르면 `SpeechRecognition` 이 곧바로 `error: not-allowed` 로 끝남(이벤트 로그에만 "음성 인식 오류: not-allowed"). **Chrome 은 비보안 출처(HTTP, localhost 아님)에서 마이크를 허용하지 않는다** — `window.isSecureContext === false`, `permissions.query(microphone) → denied`. 서버 쪽(`/api/assistant/chat` Claude 5.2 s, `/command` gemma 5.7 s, Pi 5 claude 로그인)은 모두 정상이었다 |
+| 해결(설정) | Tailscale 에 HTTPS 인증서 도메인이 이미 있다(`tailscale status --json` → CertDomains `clinostat-pi.tail9f896d.ts.net`). 파이에서 **sudo 로 한 번**: `sudo tailscale serve --bg --https=443 http://127.0.0.1:8000` → `https://clinostat-pi.tail9f896d.ts.net/` (Let's Encrypt 인증서 자동, 첫 접속은 발급으로 10~30 s). 두 화면의 WebSocket 은 이미 `location.protocol` 로 `wss:` 를 고른다. 앞으로 sudo 없이 바꾸려면 `sudo tailscale set --operator=aiworker-1`. aiworker-1 로는 `serve config denied` 라 자동화 도구가 못 함 — **사람이 실행** |
+| 서버 | `assistant_tools.tailscale_https_url()`(`tailscale status --json` CertDomains[0], 없으면 None) 을 lifespan 에서 한 번 조회해 `/api/assistant/status.https_url` 로 내보냄. Claude 시스템 프롬프트에 "읽기 쉬운 구어체, degraded→저하·fault→고장·rpm→알피엠, 괄호·기호·마크다운 금지" 추가 |
+| 위젯 | HTTP 출처면 마이크 버튼을 끄고 힌트에 이유 + "HTTPS 로 열기" 링크(status 의 https_url + 현재 경로). `SR_ERRORS` 로 not-allowed/no-speech/audio-capture/network 를 한글 문구로 힌트에 표시(전에는 로그에만). 글 입력은 HTTP 에서도 그대로 |
+| TTS | (1) 목소리 선택: `NOVELTY_VOICES`(macOS Eddy·Grandma 등 장난 목소리) 제외, `PREFERRED_VOICES` 순(Edge Natural → Google 한국의 → 유나/Yuna → SunHi…). 옵션 줄 `<select id="vaVoice">` 로 운영자가 고르면 localStorage 에 저장. (2) `normalizeForSpeech`: 영문 상태어·단위·기호를 발음으로(degraded→저하, 9.42 kΩ→9.42 킬로옴, 600 Hz→헤르츠, `[실행 결과]`·→ 등 제거). 화면 말풍선은 원문. (3) `splitSentences` 로 문장마다 별도 발화 — Chrome 의 긴 발화(≈15 s) 끊김 회피, 문장 사이 쉼. rate 1.05→1.0 |
+| 테스트 | `test_dashboard_voice.py` +2, `test_assistant_tools.py` +6(tailscale_https_url), `test_assistant_claude.py` +2. 전체 **1074 passed** |
+| 파이 배포 | deploy_to_pi.sh (백업 `~/spacebio-backups/20261108_185223`). 실측: HTTP 화면에서 패널 → 마이크 비활성 + HTTPS 링크 `https://clinostat-pi.tail9f896d.ts.net/`, 글 입력 "지금 상태 한 문장으로" → Claude 6.0 s 구어체 답. 콘솔 오류 없음 |
+| 더 자연스러운 목소리(선택지) | ① 코드 변경 없음: macOS 시스템 설정 → 손쉬운 사용 → 콘텐츠 말하기 → 시스템 음성 → 음성 관리 → 한국어 **유나(프리미엄/향상됨)** 내려받기 → Chrome 의 '유나' 가 그 품질로 바뀜. Windows 는 Edge 의 `SunHi Online (Natural)` 이 위 선호 순서 1순위. ② 서버 TTS: 파이에 `edge-tts`(MS 신경망 ko-KR-SunHiNeural, 무료·인터넷 필요)로 `/api/assistant/tts` → mp3 를 위젯이 `<audio>` 재생. ③ 오프라인 신경망: Pi 5/Spark 에 MeloTTS(ko) 또는 Kokoro 계열 — 품질은 ②와 비슷, 설치 부담 큼. **다음 세션에 ② 를 권장** |
+| 남은 일 | 사용자가 파이에서 `sudo tailscale serve …` 실행 → `https://clinostat-pi.tail9f896d.ts.net/` 에서 마이크 권한 허용 1회 → 음성 명령 실측. `/console` 의 자체 TTS 는 아직 옛 방식(첫 ko 목소리·치환 없음) |
+
+---
+
 ## 2026-11-05 — 기존 대시보드(/)에 음성 비서 위젯 (파이 배포 완료)
 
 | 항목 | 상태 |
